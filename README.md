@@ -1,86 +1,141 @@
-# OBS 鼠标高亮叠加 (Mouse FX)
+[English](README.md) | 简体中文
 
-一个 **OBS 内置 Lua 脚本**：装上之后，直接在画面里画出鼠标高亮圈、点击波纹、移动拖影，
-并把系统光标画在最上层——**教程 / 演示录屏神器**。
+# OBS Mouse Highlight Overlay (Mouse FX) / OBS 鼠标高亮叠加
 
-![效果示意](dev-archive/current_x4.png)
+<p align="center">
+  <img src="docs/hero-highlight.png" width="420" alt="mouse highlight">
+</p>
 
-## 特性
+An **OBS built-in Lua script** that draws a mouse highlight circle, click ripples and a motion
+trail directly onto your canvas — and renders the system cursor **on top of everything**.
+Perfect for tutorials, demos and screencasts.
 
-- **常驻高亮圈**：外环 + 内部半透明填充，颜色 / 半径 / 粗细可调（默认黄圈）
-- **点击波纹**：左 / 右 / 中键可设不同颜色，支持 1~3 重扩散环
-- **移动拖影**（可选）：跟随鼠标的残影
-- **自绘光标**（核心）：脚本实时向 Windows 抓取当前光标位图（含热点）画在**最上层**，
-  所以高亮圈永远在光标「下面」，不会把光标染色 / 盖住
-  - 换光标主题 / 换形状（箭头↔文本↔手型）**自动跟上**；动画光标连采 5 帧循环播放
-  - 抓取失败自动回落：自带箭头图 → 内置 SDF 箭头，永远不会没光标
-- **多显示器**：自动匹配采集源对应的物理屏，多屏坐标不乱
-- **联动缩放**：配合 [obs-zoom-to-mouse](https://github.com/tryptophane/obs-zoom-to-mouse) 放大跟焦时自动重映射坐标
-- **零依赖**：不需要 Python 服务、浏览器源或任何后台程序，一个 Lua 脚本 + 一个 effect 文件搞定
+一个 **OBS 内置 Lua 脚本**：直接在画面里画出鼠标高亮圈、点击波纹、移动拖影，
+并把系统光标画在最上层——教程 / 演示录屏神器。
 
-## 安装
+## Features
 
-1. 下载本仓库的 `obs-fx` 目录（三个文件 `mouse-fx.lua` / `mouse-fx.effect` / `blank.png`
-   必须放在一起，别拆开）
-2. OBS 菜单 → **工具 → 脚本** → 点 **+** → 选 `obs-fx/mouse-fx.lua`
-3. 参数改完立即生效，无需重启
+- **Persistent highlight circle** — outer ring + translucent fill, both individually toggleable
+  (default: yellow ring + soft fill)
+- **Click ripples** — left / right / middle buttons can have different colors; 1–3 expanding rings
+- **Optional motion trail** — fading afterimages that follow the cursor
+- **Self-drawn cursor** (the core feature) — the script grabs the current Windows cursor bitmap
+  (including hotspot) in real time and paints it on the **topmost layer**, so the highlight circle
+  always sits *under* the cursor instead of tinting it:
+  - Switching cursor themes / shapes (arrow ↔ text ↔ hand) is picked up **automatically**
+  - Animated `.ani` cursors are sampled into 5 frames and looped
+  - Graceful fallback if grabbing fails: bundled arrow sprite → built-in SDF arrow
+- **Works with custom cursor themes** — any theme you use on Windows is what gets drawn:
 
-> 路径建议不含中文（个别 OBS 版本加载非 ASCII 路径会失败）。
+  <p align="center"><img src="docs/effect-custom-cursor.png" width="300" alt="custom cursor theme"></p>
 
-## 用法
+- **Multi-monitor aware** — automatically matches the monitor your capture source points at
+- **Zoom-follow compatible** — works with
+  [obs-zoom-to-mouse](https://github.com/tryptophane/obs-zoom-to-mouse); coordinates are remapped
+  every frame so the overlay stays locked while zooming
+- **Zero dependencies** — no Python service, no browser source, no background app.
+  One Lua script + one effect file.
 
-### 用法 A：给采集源加滤镜（推荐）
+More effects:
 
-「显示器采集 / 窗口采集 / 游戏采集」右键 → **滤镜** → **+** → 选 **鼠标高亮叠加 (Mouse FX)**。
-滤镜会自动识别你采集的是哪块屏，多屏也不用管。
+<p align="center">
+  <img src="docs/effect-glow.png" width="300" alt="glow effect">
+  <img src="docs/effect-cyan.png" width="300" alt="cyan highlight">
+</p>
 
-### 用法 B：独立叠加层
+## Installation
 
-场景 → 来源 **+** → **鼠标高亮层 (Mouse FX)**，拖到最上层。
-独立层不知道你录的是哪块屏，需要在脚本面板「坐标区域 → 指定显示器」里选一下，
-并把「独立源 宽/高」设成那块屏的分辨率。
+1. Download the `obs-fx` folder from this repository
+   (`mouse-fx.lua`, `mouse-fx.effect` and `blank.png` **must stay together in one directory**)
+2. OBS menu → **Tools → Scripts** → click **+** → pick `obs-fx/mouse-fx.lua`
+3. Every parameter applies instantly, no restart needed
 
-### 高亮圈在光标「下面」是怎么做到的？
+> Prefer a path without non-ASCII characters (some OBS builds fail to load scripts
+> from such paths).
 
-OBS 的「显示器采集」会把系统光标**直接画进采集画面**，而高亮圈叠在画面之上，
-物理上不可能钻进画面，半透明填充必然糊在光标上。
+## Usage
 
-本插件的解法：勾选「自绘接管」后，脚本自动关掉采集源的「捕获光标」，
-改为把当前光标**自己画在最上层**。图层顺序固定为：
+### A. As a filter on your capture source (recommended)
+
+Right-click your **Display Capture / Window Capture / Game Capture** → **Filters** → **+** →
+**Mouse Highlight Overlay (Mouse FX)**.
+The filter detects which monitor it is attached to and converts coordinates automatically —
+multi-monitor setups need no manual config.
+
+### B. As a standalone overlay source
+
+Add source **Mouse Highlight Layer (Mouse FX)** and drag it to the top.
+A standalone layer has no idea which monitor you are recording, so in the script panel choose
+**Region → Specify monitor** and set **Layer width/height** to that monitor's resolution:
+
+<p align="center"><img src="docs/panel-region.png" width="480" alt="region settings"></p>
+
+### Why the circle stays *under* the cursor
+
+OBS's display capture bakes the system cursor **into the captured frame**, while the highlight
+overlay sits above the frame — a translucent fill would inevitably smear over the cursor.
+
+The fix: with **Cursor takeover** enabled, the script automatically disables the capture source's
+"Capture cursor" option and draws the cursor itself on the topmost layer. The layer order is fixed:
 
 ```
-拖影 → 柔光 → 点击波纹 → 内部填充 → 外环 → 光标（永远在最上）
+trail → glow → click ripples → fill → ring → cursor (always on top)
 ```
 
-## 参数
+## Parameters
 
-脚本面板按「坐标区域 / 常驻高亮圈 / 点击波纹 / 移动拖影 / 自绘光标 / 其它」分组，
-完整参数表见 **[obs-fx/使用说明.md](obs-fx/使用说明.md)**。
+The properties panel is grouped into *Region / Highlight circle / Click ripples / Trail /
+Custom cursor / Misc*. Full parameter tables live in
+**[obs-fx/使用说明.md](obs-fx/使用说明.md)** (Chinese). Highlights:
 
-## 排障
-
-打开「输出日志」开关后重载脚本，在 OBS 日志（帮助 → 日志文件）里找 `[鼠标高亮]` 开头的行，
-正常应看到 `首帧渲染完成`。常见问题速查：
-
-| 现象 | 处理 |
+| Group | Key options |
 |---|---|
-| 圈的位置偏移 | 看日志「映射区域」行；不对就改「坐标区域 → 自定义」手填 |
-| 独立层位置对不上 | 「坐标区域 → 指定显示器」选对屏，「独立源 宽/高」设成该屏分辨率 |
-| 画面上两个光标 | 确认「自绘光标」和「自绘接管」都勾着 |
-| 换光标主题没跟上 | 点「重新抓取光标」按钮 |
-| 完全不出效果 | 确认三个文件在同一目录、滤镜已启用、日志有「首帧渲染完成」 |
+| Highlight circle | style, radius, ring thickness, color, opacity, glow |
+| Click ripples | duration, radii, ring width, 1–3 rings, per-button colors |
+| Trail | count, radius, sampling interval, color |
+| Custom cursor | auto-grab system cursor, regrab button, image fallback, hotspot, scale |
+| Region | auto / primary monitor / virtual desktop / custom / specify monitor |
+| Misc | smoothing, zoom-follow source, debug logging |
 
-完整排障表见 [obs-fx/使用说明.md](obs-fx/使用说明.md#五排障)。
+<p align="center">
+  <img src="docs/panel-highlight.png" width="420" alt="highlight settings">
+  <img src="docs/panel-ripple.png" width="420" alt="ripple settings">
+</p>
 
-## 改代码 / 二次开发
+<p align="center">
+  <img src="docs/panel-trail.png" width="420" alt="trail settings">
+  <img src="docs/panel-cursor.png" width="420" alt="cursor settings">
+</p>
 
-见 **[DEVELOPMENT.md](DEVELOPMENT.md)**：原理拆解、关键代码索引、历史踩坑记录，
-以及 `dev-archive/` 里的光标解析 / 掩码修复验证 / FFI 审计等调试脚本。
+## Troubleshooting
 
-## 平台
+Enable **Debug logging**, reload the script, then check the OBS log file
+(Help → Log Files) for lines starting with `[鼠标高亮]` — a healthy load shows
+`首帧渲染完成` (first frame rendered).
 
-仅 **Windows**（坐标与光标都走 Win32 API）。OBS Studio 28+（LuaJIT + libobs 图形接口）实测可用。
+| Symptom | Fix |
+|---|---|
+| Circle offset from the real cursor | Check the "mapped region" log line; if wrong, switch Region to **Custom** and enter the monitor's origin + resolution |
+| Standalone layer misaligned | Region → **Specify monitor**, and set Layer width/height to that monitor's resolution |
+| Two cursors on screen | Make sure both **Self-drawn cursor** and **Cursor takeover** are enabled |
+| Cursor theme change not picked up | Click the **Regrab cursor** button |
+| Nothing shows up | Verify the three files are in the same directory, the filter is enabled, and the log shows "first frame rendered" |
+
+The full troubleshooting table (Chinese) is in
+[obs-fx/使用说明.md](obs-fx/使用说明.md#五排障).
+
+## Development
+
+See **[DEVELOPMENT.md](DEVELOPMENT.md)** for the architecture breakdown, key code index and the
+history of hard-won fixes, plus the debug scripts in `dev-archive/`
+(cursor parsing, 1bpp mask verification, FFI auditing, PNG regenerating).
+
+## Platform
+
+**Windows only** (cursor position and bitmap come from the Win32 API).
+Tested with OBS Studio 28+ (LuaJIT + libobs graphics API).
 
 ## License
 
-[MIT](LICENSE)。`cursor.png` 为本仓库脚本生成的中性箭头图，无第三方版权。
+[MIT](LICENSE). The bundled `cursor.png` is a neutral arrow generated by
+`dev-archive/make_cursor_png.py` — no third-party copyright attached.
