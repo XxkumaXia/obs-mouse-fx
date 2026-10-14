@@ -32,6 +32,10 @@ local REGRAB = 0
 -- 同一条错误只报一次（换主题反复失败时不刷屏）
 local CUR_ERR_SEEN = {}
 
+-- 版本号：加载日志里会打出来，排障时先确认 OBS 加载的确实是这一版
+-- （踩过「仓库改了但 OBS 还在跑旧文件」的坑，日志不带版本号根本分不清）
+local SCRIPT_VERSION = "1.1.0"
+
 -- 日志默认关闭，避免在 OBS 脚本日志里刷屏。需要排障时在面板里打开「输出日志」。
 local function log(msg)
 	if S.log_on then
@@ -179,10 +183,48 @@ local function detect_source_region(source)
 	return { m.left, m.top, m.w, m.h }
 end
 
+-- 独立源：按源名读它捕获的显示器矩形（自动模式用）。
+-- 滤镜版能 obs_filter_get_target 直接拿到挂载目标；独立源是游离图层，只能按名字找源。
+-- 「多屏兼容」的关键：采集源属性里换块屏，这里 2 秒内就能跟上，区域和宽高都不用重配。
+local function detect_named_source_region(name)
+	if name == nil or name == "" then
+		return nil
+	end
+	local ok, src = pcall(obs.obs_get_source_by_name, name)
+	if not ok or src == nil then
+		return nil
+	end
+	local r = nil
+	local ok2, res = pcall(function()
+		if obs.obs_source_get_id(src) ~= "monitor_capture" then
+			return nil
+		end
+		local st = obs.obs_source_get_settings(src)
+		if st == nil then
+			return nil
+		end
+		local mid = obs.obs_data_get_string(st, "monitor_id")
+		obs.obs_data_release(st)
+		local m = find_monitor(mid)
+		if m == nil then
+			return nil
+		end
+		return { m.left, m.top, m.w, m.h }
+	end)
+	if ok2 then
+		r = res
+	end
+	obs.obs_source_release(src)
+	return r
+end
+
 -- ---------------------------------------------------------------- 缩放联动
 -- 与 obs-zoom-to-mouse.lua 搭配用：它对采集源做「裁剪滤镜压小输出 + 场景项拉伸回原尺寸」
 -- 来放大画面，场景项变换本身不动。独立源（鼠标高亮层）是另一个图层，吃不到这个变换，
 -- 所以这里主动读出联动源上裁剪滤镜的当前裁剪框，把光标坐标重新映射回放大后的画面。
+-- obs-zoom-to-mouse（BlankSourceCode/obs-zoom-to-mouse）那枚裁剪滤镜的固定名，
+-- 联动重映射只认它（踩坑原因见 follow_find_crop_name 里的注释）
+local ZOOM_CROP_NAME = "obs-zoom-to-mouse-crop"
 -- 解析联动源上的裁剪滤镜名。★ 现场取用、用完立即释放，绝不跨帧持有 source 引用 ★
 -- （曾经把源引用缓存到 d.cap 长期持有：OBS 关闭时该引用会拖住源对象，
 --   obs_source_destroy_defer 里释放顺序错乱 → 未处理异常 c0000005 → 崩溃/每次启动弹恢复提示。）
@@ -201,24 +243,26 @@ local function follow_find_crop_name()
 		return nil
 	end
 
-	-- 找裁剪滤镜：优先 obs-zoom-to-mouse 的（名字带 zoom），其次任意启用的 crop_filter
+	-- 找裁剪滤镜：只认 obs-zoom-to-mouse 的精确名。
+	-- 曾经是「名字带 zoom 就算，再不然 fallback 到任意启用的 crop_filter」，踩过两个坑：
+	--   ① zoom 脚本会把场景项自带的 transform 裁剪转成临时滤镜
+	--      temp_obs-zoom-to-mouse-crop——名字也带 zoom，但里面是用户的静态裁剪、
+	--      不是逐帧动画裁剪框，认它就会算错倍率、高亮整体偏移；
+	--   ② 用户按 zoom 脚本 README 建议自挂的 Crop/Pad 滤镜会被当成联动裁剪框，
+	--      坐标参考系对不上，再叠加「自绘接管」失效就是屏幕上两个光标。
+	-- 现在认不到就返回 nil（调用方按未放大处理并打警告），绝不拿别的滤镜顶替。
 	local name = nil
 	local ok2, filters = pcall(obs.obs_source_enum_filters, src)
 	if ok2 and filters ~= nil then
-		local fallback = nil
 		for _, f in pairs(filters) do
 			if f ~= nil and obs.obs_source_enabled(f) and
 				obs.obs_source_get_id(f) == "crop_filter" then
 				local nm = obs.obs_source_get_name(f) or ""
-				if string.find(string.lower(nm), "zoom", 1, true) ~= nil then
+				if nm == ZOOM_CROP_NAME then
 					name = nm
 					break
 				end
-				if fallback == nil then fallback = nm end
 			end
-		end
-		if name == nil then
-			name = fallback
 		end
 		local release = obs.obs_source_list_release or obs.source_list_release
 		if release ~= nil then
@@ -240,10 +284,25 @@ local function follow_crop(d)
 		d.follow_t = nil
 		d.crop_name = nil
 		d.follow_logged = false
+		d.follow_warned = false
+		d.follow_miss = 0
 	end
 	if d.follow_t == nil or (d.clock - d.follow_t) >= 2.0 then
 		d.follow_t = d.clock
 		d.crop_name = follow_find_crop_name()
+		if d.crop_name == nil then
+			-- 连续几次都找不到再警告：zoom 脚本的裁剪滤镜是懒建的，
+			-- 脚本刚加载 / 切场景后要过几秒才出现，不能一找不到就叫
+			d.follow_miss = (d.follow_miss or 0) + 1
+			if d.follow_miss >= 3 and not d.follow_warned then
+				d.follow_warned = true
+				logerr("联动缩放：源「" .. tostring(S.follow_source) ..
+					"」上找不到 zoom 裁剪滤镜（" .. ZOOM_CROP_NAME .. "），暂按未放大处理。" ..
+					"不会拿采集源上其它 Crop/Pad 滤镜顶替；zoom 脚本建好滤镜后会自动接上")
+			end
+		else
+			d.follow_miss = 0
+		end
 	end
 	if d.crop_name == nil then
 		return nil
@@ -1193,6 +1252,18 @@ local CURSOR_SOURCES = {
 	game_capture    = true,
 }
 
+-- 同一实例、同一原因只警告一次（原因变了会重新武装）。
+-- 这些是真正的配置问题（关不掉「捕获光标」= 双光标/高亮糊光标），
+-- 走 logerr 始终输出，不受面板「输出日志」开关限制——排障时不用先开开关。
+local function warn_once(d, reason, nm, msg)
+	local key = tostring(reason) .. "|" .. tostring(nm or "")
+	if d.warn_key == key then
+		return
+	end
+	d.warn_key = key
+	logerr(msg)
+end
+
 -- 找出「该关捕获光标」的那个采集源：
 --   滤镜实例 → 它挂载的目标源（借用引用，绝不能 release）
 --   独立源   → take_src（空则回退「联动缩放源」）（有引用，用完必须 release）
@@ -1225,11 +1296,39 @@ local function apply_cursor_takeover(d)
 
 	local target, owned = takeover_target(d)
 	if target == nil then
+		local is_filter = obs.obs_source_get_id(d.source) == "mouse_fx_filter"
+		-- 滤镜被用户禁用是正常状态（不去动采集源），不警告
+		if is_filter and not obs.obs_source_enabled(d.source) then
+			return
+		end
+		if S.take_cursor and S.cur_on then
+			if is_filter then
+				warn_once(d, "no_parent", "",
+					"自绘接管：滤镜没有挂到任何源上，找不到要关「捕获光标」的目标")
+			else
+				local nm = S.take_src
+				if nm == nil or nm == "" then
+					nm = S.follow_source
+				end
+				if nm == nil or nm == "" then
+					warn_once(d, "no_target", "",
+						"自绘接管：没有可接管的目标。独立源请把「接管用的采集源名」填成你的采集源，" ..
+						"或选中「联动缩放源」（接管源名留空时用它）；否则采集源的「捕获光标」关不掉——" ..
+						"半透明填充会糊在光标上，配合放大脚本时更是两个光标")
+				else
+					warn_once(d, "no_source", nm,
+						"自绘接管：找不到名为「" .. tostring(nm) .. "」的采集源（被改名或删除了？）。" ..
+						"「捕获光标」关不掉，画面上会出现两个光标")
+				end
+			end
+		end
 		return
 	end
 	local ok_id, id = pcall(obs.obs_source_get_id, target)
 	if not ok_id or id == nil or not CURSOR_SOURCES[id] then
 		if owned then obs.obs_source_release(target) end
+		warn_once(d, "bad_type", tostring(obs.obs_source_get_name(target)),
+			"自绘接管：目标源不是显示器/窗口/游戏采集，关不掉它的「捕获光标」")
 		return
 	end
 
@@ -1237,6 +1336,8 @@ local function apply_cursor_takeover(d)
 	local ok_st, st = pcall(obs.obs_source_get_settings, target)
 	if not ok_st or st == nil then
 		if owned then obs.obs_source_release(target) end
+		warn_once(d, "no_settings", tostring(obs.obs_source_get_name(target)),
+			"自绘接管：读不到目标源的设置，本轮跳过")
 		return
 	end
 	local now = obs.obs_data_get_bool(st, "capture_cursor")
@@ -1313,8 +1414,51 @@ local function update_state(d)
 				end
 			end
 		else
-			-- 独立源没有挂载目标，自动模式改用「指定显示器」所选屏；没选则主屏
-			if S.monitor_sel ~= "" then
+			-- 独立源没有挂载目标：自动模式优先读「联动缩放源 / 接管目标源」实际捕获的
+			-- 显示器（多屏零配置：采集源属性里换块屏，这里 2 秒内自动跟上，宽高也跟着换）；
+			-- 读不到才退回「指定显示器」→ 主屏
+			local nm = S.follow_source
+			if nm == nil or nm == "" then
+				nm = S.take_src
+			end
+			if nm ~= nil and nm ~= "" then
+				if d.auto_nm ~= nm then
+					-- 联动源换了：重新探测、重新武装日志
+					d.auto_nm = nm
+					d.auto_logged = false
+					d.auto_failed = 0
+					d.auto_size = nil
+				end
+				if d.auto_t == nil or (d.clock - d.auto_t) > 2.0 then
+					d.auto_t = d.clock
+					local r = detect_named_source_region(nm)
+					if r ~= nil then
+						d.auto = r
+						if not d.auto_logged then
+							d.auto_logged = true
+							log("独立源自动匹配：联动源「" .. nm .. "」捕获 " ..
+								tostring(r[1]) .. "," .. tostring(r[2]) .. " " ..
+								tostring(r[3]) .. "x" .. tostring(r[4]))
+						end
+						local sz = tostring(r[3]) .. "x" .. tostring(r[4])
+						if d.auto_size ~= sz then
+							d.auto_size = sz
+							log("独立源宽高已跟随捕获的显示器：" .. sz)
+						end
+					elseif not d.auto_logged then
+						d.auto_failed = (d.auto_failed or 0) + 1
+						if d.auto_failed >= 3 then
+							d.auto_logged = true
+							logerr("独立源自动匹配：读不到联动源「" .. nm ..
+								"」捕获的显示器（源被删了 / 不是显示器采集 / 显示器识别失败），" ..
+								"已退回「指定显示器」/主屏。多屏录制时请确认「联动缩放源」" ..
+								"填的是当前在录那块屏的采集源")
+						end
+					end
+				end
+			end
+			-- 没配联动/接管源：退回「指定显示器」所选屏（原有行为）
+			if d.auto == nil and S.monitor_sel ~= "" then
 				local m = find_monitor(S.monitor_sel)
 				if m ~= nil then
 					d.auto = { m.left, m.top, m.w, m.h }
@@ -1610,10 +1754,18 @@ source_def.destroy = function(d)
 end
 
 source_def.get_width = function(d)
+	-- 「自动」模式探测到采集源的显示器时，宽高跟着那块屏走（多屏零配置）；
+	-- 探测不到（没配联动源 / 源被删）才用手动设置的宽
+	if d.auto ~= nil and d.auto[3] ~= nil and d.auto[3] > 0 then
+		return d.auto[3]
+	end
 	return S.canvas_w
 end
 
 source_def.get_height = function(d)
+	if d.auto ~= nil and d.auto[4] ~= nil and d.auto[4] > 0 then
+		return d.auto[4]
+	end
 	return S.canvas_h
 end
 
@@ -1629,8 +1781,9 @@ end
 function script_description()
 	return "在画面上叠加自绘鼠标效果：常驻高亮圈 + 点击扩散波纹 + 拖影 + 光标。\n" ..
 	       "用法一（推荐）：给「显示器采集 / 窗口采集」加滤镜「鼠标高亮叠加」，自动跟随那块屏；\n" ..
-	       "用法二：场景里新增来源「鼠标高亮层」拖到最上层——需在「坐标区域」选「指定显示器」并\n" ..
-	       "在下拉里挑你正在录的那块屏，再把「独立源 宽/高」设成该屏分辨率。\n" ..
+	       "用法二：场景里新增来源「鼠标高亮层」拖到最上层，「坐标区域」选「自动」并填好\n" ..
+	       "「联动缩放源」（你在录的那块屏的采集源）即可——区域和宽高都自动跟随那块屏，\n" ..
+	       "换屏录制不用改任何设置；也可选「指定显示器」手动固定。\n" ..
 	       "光标：脚本会关掉采集源的「捕获光标」，改由自己把当前系统光标画在高亮圈之上，\n" ..
 	       "所以圈永远在光标「下面」；换光标主题 / 换形状会自动跟上。\n" ..
 	       "配合 obs-zoom-to-mouse 缩放时：独立源选好「联动缩放源」即可全程对齐。\n" ..
@@ -1643,7 +1796,7 @@ function script_properties()
 	obs.obs_properties_add_text(props, "sep_region", "—— 坐标区域 ——", obs.OBS_TEXT_INFO)
 	local p = obs.obs_properties_add_list(props, "region_mode", "鼠标坐标区域",
 		obs.OBS_COMBO_TYPE_LIST, obs.OBS_COMBO_FORMAT_INT)
-	obs.obs_property_list_add_int(p, "自动（滤镜读下方采集源；独立源用下面「指定显示器」）", 0)
+	obs.obs_property_list_add_int(p, "自动（滤镜读挂载目标；独立源读「联动缩放源」捕获的显示器）", 0)
 	obs.obs_property_list_add_int(p, "主屏", 1)
 	obs.obs_property_list_add_int(p, "虚拟桌面（多屏全部映射）", 2)
 	obs.obs_property_list_add_int(p, "自定义（用下面的数值）", 3)
@@ -1656,9 +1809,9 @@ function script_properties()
 	obs.obs_properties_add_int(props, "offset_y", "整体偏移 Y（微调）", -4096, 4096, 1)
 	obs.obs_properties_add_float_slider(props, "zoom", "缩放修正", 0.1, 4.0, 0.01)
 
-	-- 指定显示器下拉：区域选「指定显示器」时生效；独立源在「自动」下也会用它定位
+	-- 指定显示器下拉：区域选「指定显示器」时生效；独立源「自动」读不到联动源时兜底
 	local pmon = obs.obs_properties_add_list(props, "monitor_sel",
-		"指定显示器（区域选「指定显示器」时生效；独立源「自动」也用此项）",
+		"指定显示器（区域选「指定显示器」时生效；「自动」读不到联动源时兜底）",
 		obs.OBS_COMBO_TYPE_LIST, obs.OBS_COMBO_FORMAT_STRING)
 	obs.obs_property_list_add_string(pmon, "（未选 / 用主屏）", "")
 	local mons = enum_monitors()
@@ -1786,8 +1939,8 @@ function script_properties()
 
 	obs.obs_properties_add_text(props, "sep_other", "—— 其它 ——", obs.OBS_TEXT_INFO)
 	obs.obs_properties_add_float_slider(props, "smooth", "跟手程度（1=完全不插值）", 0.05, 1.0, 0.05)
-	obs.obs_properties_add_int(props, "canvas_w", "独立源 宽", 16, 16384, 1)
-	obs.obs_properties_add_int(props, "canvas_h", "独立源 高", 16, 16384, 1)
+	obs.obs_properties_add_int(props, "canvas_w", "独立源 宽（「自动」模式下跟随捕获的显示器）", 16, 16384, 1)
+	obs.obs_properties_add_int(props, "canvas_h", "独立源 高（「自动」模式下跟随捕获的显示器）", 16, 16384, 1)
 	obs.obs_properties_add_bool(props, "log_on", "输出日志（调试用，默认关闭不刷屏）")
 
 	return props
@@ -1797,7 +1950,7 @@ function script_load(settings)
 	script_update(settings)
 	obs.obs_register_source(filter_def)
 	obs.obs_register_source(source_def)
-	log("已加载。区域 " .. tostring(S.region_left) .. "," .. tostring(S.region_top) ..
+	log("已加载 v" .. SCRIPT_VERSION .. "。区域 " .. tostring(S.region_left) .. "," .. tostring(S.region_top) ..
 		" " .. tostring(S.region_w) .. "x" .. tostring(S.region_h))
 end
 

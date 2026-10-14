@@ -31,7 +31,7 @@ Built for tutorials, demos and screencasts.
 - **Multi-monitor aware** — automatically matches the monitor that your capture source points at,
   so coordinates stay correct across displays
 - **Zoom-follow compatible** — pairs with
-  [obs-zoom-to-mouse](https://github.com/tryptophane/obs-zoom-to-mouse): coordinates are remapped
+  [obs-zoom-to-mouse](https://github.com/BlankSourceCode/obs-zoom-to-mouse): coordinates are remapped
   every frame, keeping the overlay locked while zooming
 - **Zero dependencies** — no Python service, no browser source, no background process.
   One Lua script plus one effect file
@@ -47,7 +47,7 @@ More effects:
 
 ### 1. Get the files
 
-Download `obs-mouse-fx-v1.0.0.zip` from the
+Download `obs-mouse-fx-v1.1.0.zip` from the
 [Releases page](https://github.com/XxkumaXia/obs-mouse-fx/releases) and extract it
 (or clone this repository and use the `obs-fx` folder).
 
@@ -88,14 +88,27 @@ multi-monitor setups need no manual configuration.
 ### B. As a standalone overlay source
 
 Scene → Sources **+** → **Mouse Highlight Layer (Mouse FX)**, then drag it to the top of the list.
-A standalone layer cannot tell which monitor you are recording, so in the script panel set
+Once you fill in **Zoom-follow source** (or **Takeover source name**), the script finds that capture
+source by name and reads which monitor it is capturing — **region and layer size follow it
+automatically, so switching monitors needs no reconfiguration**. You can also pin it manually with
 **Region → Specify monitor** and set **Layer width / height** to that monitor's resolution:
 
 <p align="center"><img src="docs/panel-region.png" width="480" alt="region settings"></p>
 
-Optional: when using [obs-zoom-to-mouse](https://github.com/tryptophane/obs-zoom-to-mouse) with
-the standalone layer, pick the zoomed capture source in the **Zoom-follow source** dropdown and
-the overlay remaps itself to the zoom crop every frame.
+### Using it together with [obs-zoom-to-mouse](https://github.com/BlankSourceCode/obs-zoom-to-mouse)
+
+Both scripts stack fine, but a few hard rules (full troubleshooting in `obs-fx/使用说明.md`):
+
+- **Pick ONE usage**: filter on the capture source → no standalone layer in the scene; standalone
+  layer → **never attach any filter to it** — it is the final output stage, so a filter on it means
+  drawing everything twice (the classic "two circles, one big one small, washed-out colors" bug)
+- **Filter version**: attach it to the capture source, **below** the zoom crop filter — it then gets
+  cropped and zoomed along with the frame and stays aligned for free
+- **Standalone version**: drag it to the top, set **Zoom-follow source** to the zoomed capture
+  source; the layer remaps itself to the crop frame every frame, ring and glow scale with the zoom
+- **Keep "Capture cursor" unchecked**: **Cursor takeover** handles it; checking it back = two cursors
+- **Multi-monitor**: set Region to **Auto** (never "Primary" — Windows' primary flag may not be the
+  monitor you are recording); switching monitors re-syncs within ~2 seconds
 
 ### Why the circle stays *under* the cursor
 
@@ -145,7 +158,7 @@ Enable **Debug logging**, reload the script, then open the OBS log
 | Symptom | Fix |
 |---|---|
 | Circle offset from the real cursor | Check the "mapped region" log line; if it is wrong, switch Region to **Custom** and enter the monitor origin + resolution |
-| Standalone layer misaligned | Region → **Specify monitor**, and set Layer width/height to that monitor's resolution |
+| Standalone layer misaligned | Set **Zoom-follow source** to the capture source you are recording and Region to **Auto** (region and size follow automatically); or pin it with Region → **Specify monitor** and set Layer width/height to that monitor's resolution |
 | Two cursors on screen | Make sure both **Self-drawn cursor** and **Cursor takeover** are enabled |
 | Cursor theme change not picked up | Click the **Regrab cursor** button |
 | Nothing shows up at all | Verify the three files share one folder, the filter is enabled, and the log shows "first frame rendered" |

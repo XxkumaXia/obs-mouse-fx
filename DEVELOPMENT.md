@@ -58,8 +58,13 @@ GetMonitorInfoA / EnumDisplayDevicesA / GetSystemMetrics / GetTickCount64`，
   `DeviceID`（形如 `\\?\DISPLAY#型号#...#{guid}`），同时拿到 `rcMonitor` 左上角与宽高。
 - OBS"显示器采集"源里存的 `monitor_id` **等于** 本机 `EnumDisplayDevicesA` 的 `DeviceID`（同串）。
   `find_monitor()`（lua 137 行）做双向子串匹配，把"采集源 → 物理屏"对应上。
-- 独立源没有挂载目标，`obs_filter_get_target` 返回 nil，所以面板才有"指定显示器"下拉
-  （`region_mode` 选项 4），由用户手动指定。`get_region()`（lua 375 行）是坐标换算总入口。
+- 独立源没有挂载目标，`obs_filter_get_target` 返回 nil。两条路拿到区域：
+  ① **自动**（`region_mode=0`）：`detect_named_source_region(name)`（lua 182 行）按面板
+  「联动缩放源」（空则回退「接管用的采集源名」）**按名字找源**，读它捕获的显示器矩形，
+  每 2 秒重探测——采集源属性里换块屏就自动跟上，`get_width/get_height` 也跟着返回该屏分辨率；
+  读不到（源被删/非显示器采集/识别失败）连续 3 次后 logerr 并退回「指定显示器」→ 主屏。
+  ② 手动：`region_mode=4` + `monitor_sel` 下拉。
+  `get_region()`（lua 375 行）是坐标换算总入口。
 
 ### 2.4 自绘光标（本插件的核心设计，重点坑）
 OBS"显示器采集"勾"捕获光标"时，会把系统光标**烤进采集画面**。高亮圈是叠在画面之上的图层，
@@ -92,6 +97,25 @@ OBS `obs_properties_add_color` 返回的是 **`0xAABBGGRR`（低字节是 R）**
 裁剪滤镜 `obs-zoom-to-mouse-crop` 的当前裁剪框，把光标坐标按"减裁剪框 → 乘拉伸倍率"重映射，
 高亮圈和柔光也同步乘放大倍率。滤镜版（用法 A）加在裁剪滤镜下方，天然被一起放大，不需要这项。
 
+**裁剪滤镜匹配（踩过坑，已修）**：只认精确名 `obs-zoom-to-mouse-crop`（`ZOOM_CROP_NAME` 常量，lua 188 行）。
+曾经是"名字带 zoom 就算，再不然 fallback 到任意启用的 crop_filter"——两个坑：
+① zoom 脚本会把场景项自带的 transform 裁剪转成临时滤镜 `temp_obs-zoom-to-mouse-crop`，
+名字也带 zoom，但里面是用户的**静态**裁剪、不是逐帧动画裁剪框，认它倍率就算错；
+② 用户按 zoom 脚本 README 建议自挂的 Crop/Pad 滤镜会被当成联动裁剪框，坐标参考系对不上，
+再叠加「自绘接管」失效就是屏幕上两个光标。
+现在认不到就返回 nil（按未放大处理），连续 3 次重解析（约 6 秒）找不到才打一次 logerr 警告——
+延迟是为了避开 zoom 脚本裁剪滤镜"懒建"（加载 / 切场景后要几秒才出现）。
+
+**联用硬规则（用户真机踩坑，v1.1.0 写进使用说明）**：
+① **两种用法二选一**。滤镜版挂采集源，场景里就别放独立源；放了独立源，它身上**不能再挂
+「鼠标高亮叠加」滤镜**——独立源是最终输出层，滤镜挂它 = 同一效果画两遍：底层跟着 zoom
+重映射（圈×倍率、位置对），顶层不参与重映射（停在原始坐标和大小）→ 一大一小、位置分家、
+半透两次叠加深色 → 颜色发灰。修法：进独立源的滤镜面板把「鼠标高亮叠加」删掉。
+② 滤镜版必须排在 zoom 裁剪滤镜**下方**（画全尺寸画面才会被一起裁剪放大）；zoom 脚本自己
+会周期性把裁剪滤镜推到链最上方当最终输出，顺序不用手动管。
+③ 采集源「捕获光标」保持关（两个脚本都不碰它，由 mouse-fx 自绘接管自动关）。
+④ 多屏：独立源区域选「自动」+ 填联动缩放源；别选「主屏」（Windows 主屏名分 ≠ 你录的屏）。
+
 ---
 
 ## 3. 关键代码索引（改哪改什么）
@@ -100,8 +124,8 @@ OBS `obs_properties_add_color` 返回的是 **`0xAABBGGRR`（低字节是 R）**
 |---|---|---|
 | 参数默认值 | `script_defaults()`（lua 406）+ 顶部 `S = {}`（lua 25 行） | `S` 必须在所有引用它的函数之前声明（local 可见性坑，踩过两次） |
 | 颜色（读/写） | `argb()` 289 / `rgb2int()` 299 | 严守 AABBGGRR 字节序 |
-| 显示器枚举/匹配 | `enum_monitors()` 103 / `find_monitor()` 137 | DeviceID 双向匹配 |
-| 坐标换算总入口 | `get_region()` 375 / `detect_source_region()` 160 | 独立源/滤镜分流在这里 |
+| 显示器枚举/匹配 | `enum_monitors()` 103 / `find_monitor()` 137 / `detect_named_source_region()` 182 | DeviceID 双向匹配；后者给独立源按源名定位 |
+| 坐标换算总入口 | `get_region()` 375 / `detect_source_region()` 160 / `detect_named_source_region()` 182 | 滤镜版/独立源自动分流在这里 |
 | 抓取系统光标 | `grab_cursor()` 648 / `cursor_update()` 952 / `cursor_load_png()` 890 | 1bpp 掩码在这里 |
 | 每帧状态/坐标 | `update_state()` 1261 | 鼠标、点击、光标采样都在这里 |
 | 渲染（传 uniform 给 effect） | `render_data()` 1425 | 把状态塞进 effect 的 uniform |
@@ -137,6 +161,20 @@ OBS `obs_properties_add_color` 返回的是 **`0xAABBGGRR`（低字节是 R）**
 4. **OBS 异常关闭/安全模式弹窗** → 早版本跨帧持有采集源引用导致崩溃，已修（不再跨帧持有）。
 5. **`S` 表位置** → local 只从声明处可见，函数若定义在 `S` 之前会把 `S` 当全局 → 运行时 nil 崩。务必保持 `S` 在文件开头。
 6. **日志刷屏** → 只有"配置性错误"（effect/贴图加载失败）才无条件打；鼠标/光标这类有兜底的信息一律跟"输出日志"开关走。
+7. **联动裁剪框认错滤镜** → `follow_find_crop_name()` 曾 fallback 到任意 crop_filter（含 zoom 脚本把
+   transform 裁剪转成的 `temp_obs-zoom-to-mouse-crop` 临时滤镜），倍率算错、高亮偏移。
+   已改为只认精确名 `obs-zoom-to-mouse-crop`，见 §2.6。
+8. **自绘接管失败静默** → 接管源找不到 / 目标不是采集源 / 读不到设置时曾一声不吭，排障没线索。
+   现在按原因打 `logerr`（**始终输出**，不受「输出日志」开关限制），经 `warn_once()` 去重：
+   同实例同原因只报一次，原因变化（换源/改名）重新武装。
+9. **独立源「自动」区域曾是空头支票** → `region_mode=0` 对独立源只会退化用 `monitor_sel`，
+   没有"自动"能力；用户忘选指定显示器 + 被采集屏又不是 Windows 主屏时（多屏常态），
+   `(mx-rl-cl)` 拿虚拟桌面坐标减源内坐标 → 一放大光标和圈就飞（双光标/错位）。
+   已补 `detect_named_source_region()`：按「联动缩放源/接管源」名字读它捕获的显示器，
+   区域和宽高（`get_width/get_height`）都自动跟随，换屏 2 秒内重探测。
+   遗留限制：所有设置都在脚本面板（全局表 `S`），**同一时刻只有一个联动源**——
+   要同时给两块屏各叠一层独立源，得先把设置改成按实例存（源 `update` 回调 + `d` 里存 settings），
+   是大改，本轮没做。
 
 ---
 
@@ -145,6 +183,12 @@ OBS `obs_properties_add_color` 返回的是 **`0xAABBGGRR`（低字节是 R）**
 - 语法：`dev-archive/check.py`（用 `lupa` 跑 Lua 语法检查）。
 - 光标掩码修复验证：`dev-archive/verify_fix.py`、`grab_test.py`（Python 复刻 `grab_cursor` 逻辑，验证 1bpp 掩码与黑块成因）。
 - FFI 调用审计：`dev-archive/audit_calls.py`（比对 DLL 导出表，确认每个 ffi.cdef 都真实存在）。
+- 联动/接管/自动跟随的功能测试：`dev-archive/test_zoom_link.py`（lupa + mock obs API，把
+  [mock + 源码 + 用例] 拼成同一 chunk，直接调脚本里的 local 函数跑 57 个断言：
+  精确名匹配、temp 滤镜不顶替、自挂 Crop/Pad 不误认、警告节流与去重、接管各失败路径、
+  恢复路径、独立源按联动源名探测显示器/换源重新武装/宽高跟随/失败兜底等）。
+  需要 `pip install lupa`；注意 lupa 自带 Lua 5.5（非 LuaJIT），
+  测试里用 package.preload 补了 bit / ffi mock，并用 `set_tick()` 控时钟推进 2 秒节流。
 - 真机：开 OBS 加载 → 日志应有 `首帧渲染完成`；移动鼠标看高亮圈跟随；点击看波纹；换光标主题看是否自动跟上（不行点"重新抓取光标"）。
 
 ---
@@ -162,3 +206,27 @@ OBS `obs_properties_add_color` 返回的是 **`0xAABBGGRR`（低字节是 R）**
 
 > 历史说明：早期仓库自带的 `cursor.png` 解自某第三方光标主题，为规避版权问题，
 > 开源版替换为 `make_cursor_png.py` 生成的中性箭头，相关第三方衍生图已移除。
+
+---
+
+## 8. 版本历史
+
+### v1.1.0（2026-10-15）
+- **多屏自动跟随**：独立源「坐标区域 → 自动」时，按「联动缩放源」（空则回退「接管用的采集源名」）
+  按名字读采集源捕获的显示器——区域和宽高（`get_width/get_height`）都自动跟随，采集源属性里
+  换块屏 2 秒内重探测。根治「Windows 主屏名分 ≠ 实际录的屏」导致的放大错位/双光标。
+  新增 `detect_named_source_region()`；探测失败连续 3 次 logerr 并退回「指定显示器」→ 主屏。
+- **联动裁剪滤镜精确名匹配**（`ZOOM_CROP_NAME`）：只认 `obs-zoom-to-mouse-crop`，
+  不再误认 zoom 脚本的 `temp_obs-zoom-to-mouse-crop` 临时滤镜和用户自挂的 Crop/Pad。
+- **自绘接管失败不再静默**：五条失败路径按原因 logerr（始终输出，不受「输出日志」开关限制），
+  `warn_once()` 去重、原因变化重新武装；follow 找不到裁剪滤镜连续约 6 秒才警告（避开滤镜懒建）。
+- **联用注意事项写进文档**：两种用法二选一、独立源身上不挂滤镜（画两遍的灵异现象）、
+  滤镜版排在裁剪滤镜下方、捕获光标保持关、多屏选自动别选主屏。
+- 加载日志带版本号（`已加载 v1.1.0`），排障先确认 OBS 加载的是哪版。
+- 测试 `dev-archive/test_zoom_link.py` 扩到 57 断言（新增 T16-T22 覆盖自动跟随全部路径）。
+
+### v1.0.0（2026-10-14）
+- 首个开源发布：常驻高亮圈 + 点击波纹 + 拖影 + 自绘系统光标（FFI GetCursorInfo/GetIconInfo/GetDIBits）。
+- 滤镜版（用法 A）/ 独立源版（用法 B）双注册；自绘接管自动关采集源「捕获光标」。
+- 1bpp 光标掩码正确解析（修黑块）；AABBGGRR 颜色字节序修正。
+- 配套 obs-zoom-to-mouse 缩放联动的初步支持（联动缩放源 + 裁剪框重映射）。
