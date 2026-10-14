@@ -1,0 +1,265 @@
+// mouse-fx.effect —— OBS 鼠标高亮叠加（滤镜 / 源共用）
+// 绘制内容：常驻高亮环 + 柔光、点击扩散波纹、移动拖影、可选自绘箭头光标
+// 所有坐标单位都是「源像素」，由 Lua 侧映射后传入。
+
+uniform float4x4 ViewProj;
+uniform texture2d image;
+
+sampler_state def_sampler {
+	Filter   = Linear;
+	AddressU = Clamp;
+	AddressV = Clamp;
+	AddressW = Clamp;
+};
+
+struct VertData {
+	float4 pos : POSITION;
+	float2 uv  : TEXCOORD0;
+};
+
+VertData VSDefault(VertData v_in)
+{
+	VertData vert_out;
+	vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+	vert_out.uv  = v_in.uv;
+	return vert_out;
+}
+
+// ---------------- uniform ----------------
+uniform float2 mouse_pos;   // 光标在源内的位置（像素）
+uniform float2 img_size;    // 源尺寸
+
+uniform float  hl_on;
+uniform float  hl_radius;
+uniform float  hl_thickness;
+uniform float4 hl_color;    // rgb + 已乘 环opacity 的 alpha
+uniform float  hl_ring_on;  // 是否画外环
+uniform float  hl_fill_on;  // 是否画内部圆形填充
+uniform float  hl_fill_alpha;
+
+uniform float  glow_on;
+uniform float  glow_radius;
+uniform float  glow_alpha;
+
+// 填充圆 / 柔光 的圆心：默认等于光标热点，可整体下移以避开系统光标
+uniform float2 fx_center;
+
+// 点击波纹：每槽 = (x, y, 半径, 环透明度)；颜色槽 = (r,g,b,填充透明度)
+uniform float4 ring0;  uniform float4 ringc0;
+uniform float4 ring1;  uniform float4 ringc1;
+uniform float4 ring2;  uniform float4 ringc2;
+uniform float4 ring3;  uniform float4 ringc3;
+uniform float4 ring4;  uniform float4 ringc4;
+uniform float4 ring5;  uniform float4 ringc5;
+uniform float4 ring6;  uniform float4 ringc6;
+uniform float4 ring7;  uniform float4 ringc7;
+uniform float  ring_thickness;
+
+// 拖影残点：每槽 = (x, y, 半径, 透明度)
+uniform float4 dot0;  uniform float4 dot1;
+uniform float4 dot2;  uniform float4 dot3;
+uniform float4 dot4;  uniform float4 dot5;
+uniform float4 dot6;  uniform float4 dot7;
+uniform float4 dot8;  uniform float4 dot9;
+uniform float4 dot10; uniform float4 dot11;
+uniform float4 dot_color;
+
+uniform float  cur_on;
+uniform float  cur_scale;
+uniform float4 cur_fill;
+uniform float4 cur_line;
+
+// 图片光标：cur_use_img=1 时改用纹理画光标（画在最后 = 最上层，高亮圈因此在它下面）
+uniform texture2d cimg;
+uniform float  cur_use_img;
+uniform float2 cimg_size;   // 单帧像素尺寸
+uniform float2 cimg_hot;    // 热点（相对单帧左上角，像素）
+uniform float2 cimg_uv0;    // 当前帧在贴图里的 uv 左上
+uniform float2 cimg_uv1;    // 当前帧在贴图里的 uv 右下
+
+// 光标图用点采样，像素画放大后不糊
+sampler_state cimg_sampler {
+	Filter   = Point;
+	AddressU = Clamp;
+	AddressV = Clamp;
+	AddressW = Clamp;
+};
+
+// ---------------- 工具 ----------------
+// 直接 alpha 混合（src over dst）
+float4 over(float4 dst, float4 src)
+{
+	float a = src.a + dst.a * (1.0 - src.a);
+	float3 rgb = (src.rgb * src.a + dst.rgb * dst.a * (1.0 - src.a)) / max(a, 0.0001);
+	return float4(rgb, a);
+}
+
+// 圆环遮罩
+float ringMask(float2 p, float2 c, float r, float w)
+{
+	float d = abs(length(p - c) - r);
+	return 1.0 - smoothstep(w * 0.5 - 0.5, w * 0.5 + 0.75, d);
+}
+
+// 实心圆遮罩
+float discMask(float2 p, float2 c, float r)
+{
+	float d = length(p - c);
+	return 1.0 - smoothstep(r - 1.0, r, d);
+}
+
+float4 addRing(float4 col, float2 p, float4 ring, float4 rc, float w)
+{
+	if (ring.w <= 0.0)
+		return col;
+	float4 c = col;
+	if (rc.a > 0.0) { // 内部填充
+		float m = discMask(p, ring.xy, ring.z) * rc.a * ring.w;
+		c = over(c, float4(rc.rgb, m));
+	}
+	float m = ringMask(p, ring.xy, ring.z, w) * ring.w;
+	return over(c, float4(rc.rgb, m));
+}
+
+float4 addDot(float4 col, float2 p, float4 d, float4 dc)
+{
+	if (d.w <= 0.0)
+		return col;
+	float m = discMask(p, d.xy, d.z) * d.w;
+	return over(col, float4(dc.rgb, dc.a * m));
+}
+
+// 箭头轮廓（热点在 0,0，向下；约 13 x 22 像素，之后按 cur_scale 缩放）
+float arrowSDF(float2 p)
+{
+	float2 v0 = float2(0.0, 0.0);
+	float2 v1 = float2(0.0, 20.0);
+	float2 v2 = float2(4.5, 15.0);
+	float2 v3 = float2(7.5, 22.0);
+	float2 v4 = float2(10.5, 21.0);
+	float2 v5 = float2(7.5, 13.5);
+	float2 v6 = float2(13.0, 13.5);
+
+	float d = 1.0e9;
+	bool inside = false;
+	float2 a, b, e, w, q;
+	float t, x;
+
+	a = v0; b = v1;
+	e = b - a; w = p - a; t = clamp(dot(w, e) / max(dot(e, e), 1e-6), 0.0, 1.0); q = w - e * t; d = min(d, dot(q, q));
+	if ((a.y > p.y) != (b.y > p.y)) { x = a.x + (p.y - a.y) / (b.y - a.y) * (b.x - a.x); if (p.x < x) inside = !inside; }
+
+	a = v1; b = v2;
+	e = b - a; w = p - a; t = clamp(dot(w, e) / max(dot(e, e), 1e-6), 0.0, 1.0); q = w - e * t; d = min(d, dot(q, q));
+	if ((a.y > p.y) != (b.y > p.y)) { x = a.x + (p.y - a.y) / (b.y - a.y) * (b.x - a.x); if (p.x < x) inside = !inside; }
+
+	a = v2; b = v3;
+	e = b - a; w = p - a; t = clamp(dot(w, e) / max(dot(e, e), 1e-6), 0.0, 1.0); q = w - e * t; d = min(d, dot(q, q));
+	if ((a.y > p.y) != (b.y > p.y)) { x = a.x + (p.y - a.y) / (b.y - a.y) * (b.x - a.x); if (p.x < x) inside = !inside; }
+
+	a = v3; b = v4;
+	e = b - a; w = p - a; t = clamp(dot(w, e) / max(dot(e, e), 1e-6), 0.0, 1.0); q = w - e * t; d = min(d, dot(q, q));
+	if ((a.y > p.y) != (b.y > p.y)) { x = a.x + (p.y - a.y) / (b.y - a.y) * (b.x - a.x); if (p.x < x) inside = !inside; }
+
+	a = v4; b = v5;
+	e = b - a; w = p - a; t = clamp(dot(w, e) / max(dot(e, e), 1e-6), 0.0, 1.0); q = w - e * t; d = min(d, dot(q, q));
+	if ((a.y > p.y) != (b.y > p.y)) { x = a.x + (p.y - a.y) / (b.y - a.y) * (b.x - a.x); if (p.x < x) inside = !inside; }
+
+	a = v5; b = v6;
+	e = b - a; w = p - a; t = clamp(dot(w, e) / max(dot(e, e), 1e-6), 0.0, 1.0); q = w - e * t; d = min(d, dot(q, q));
+	if ((a.y > p.y) != (b.y > p.y)) { x = a.x + (p.y - a.y) / (b.y - a.y) * (b.x - a.x); if (p.x < x) inside = !inside; }
+
+	a = v6; b = v0;
+	e = b - a; w = p - a; t = clamp(dot(w, e) / max(dot(e, e), 1e-6), 0.0, 1.0); q = w - e * t; d = min(d, dot(q, q));
+	if ((a.y > p.y) != (b.y > p.y)) { x = a.x + (p.y - a.y) / (b.y - a.y) * (b.x - a.x); if (p.x < x) inside = !inside; }
+
+	d = sqrt(d);
+	return inside ? -d : d;
+}
+
+// ---------------- 主 ----------------
+float4 PSMouse(VertData v_in) : TARGET
+{
+	float2 p = v_in.uv * img_size;
+	float4 c = float4(0.0, 0.0, 0.0, 0.0);
+
+	// 拖影（画在最底层）
+	c = addDot(c, p, dot0,  dot_color);
+	c = addDot(c, p, dot1,  dot_color);
+	c = addDot(c, p, dot2,  dot_color);
+	c = addDot(c, p, dot3,  dot_color);
+	c = addDot(c, p, dot4,  dot_color);
+	c = addDot(c, p, dot5,  dot_color);
+	c = addDot(c, p, dot6,  dot_color);
+	c = addDot(c, p, dot7,  dot_color);
+	c = addDot(c, p, dot8,  dot_color);
+	c = addDot(c, p, dot9,  dot_color);
+	c = addDot(c, p, dot10, dot_color);
+	c = addDot(c, p, dot11, dot_color);
+
+	// 柔光（圆心可用 fx_center 下移，避免糊住光标）
+	if (glow_on > 0.5 && glow_radius > 0.0) {
+		float d = length(p - fx_center);
+		float g = 1.0 - smoothstep(0.0, glow_radius, d);
+		g = g * g;
+		c = over(c, float4(hl_color.rgb, glow_alpha * g));
+	}
+
+	// 点击波纹
+	c = addRing(c, p, ring0, ringc0, ring_thickness);
+	c = addRing(c, p, ring1, ringc1, ring_thickness);
+	c = addRing(c, p, ring2, ringc2, ring_thickness);
+	c = addRing(c, p, ring3, ringc3, ring_thickness);
+	c = addRing(c, p, ring4, ringc4, ring_thickness);
+	c = addRing(c, p, ring5, ringc5, ring_thickness);
+	c = addRing(c, p, ring6, ringc6, ring_thickness);
+	c = addRing(c, p, ring7, ringc7, ring_thickness);
+
+	// 常驻高亮：内部实心圆填充（画在外环之下、箭头之下）
+	if (hl_on > 0.5 && hl_fill_on > 0.5 && hl_radius > 0.0) {
+		float m = discMask(p, fx_center, hl_radius) * hl_fill_alpha;
+		c = over(c, float4(hl_color.rgb, m));
+	}
+
+	// 常驻高亮：外环（始终锚在真实热点）
+	if (hl_on > 0.5 && hl_ring_on > 0.5 && hl_thickness > 0.0) {
+		float m = ringMask(p, mouse_pos, hl_radius, hl_thickness);
+		c = over(c, float4(hl_color.rgb, hl_color.a * m));
+	}
+
+	// 光标（画在最上层，所以高亮圈永远在光标「下面」）
+	if (cur_on > 0.5) {
+		if (cur_use_img > 0.5) {
+			float  sc = max(cur_scale, 0.01);
+			float2 sz = max(cimg_size, float2(1.0, 1.0));
+			// 热点对齐到 mouse_pos：图片左上角 = 光标位 - 热点*缩放
+			float2 org = mouse_pos - cimg_hot * sc;
+			float2 uv  = (p - org) / (sz * sc);
+			if (uv.x >= 0.0 && uv.x < 1.0 && uv.y >= 0.0 && uv.y < 1.0) {
+				float2 tuv = lerp(cimg_uv0, cimg_uv1, uv);
+				float4 t = cimg.Sample(cimg_sampler, tuv);
+				c = over(c, float4(t.rgb, t.a));
+			}
+		} else {
+			float2 q = (p - mouse_pos) / max(cur_scale, 0.01);
+			float sd = arrowSDF(q);
+			float lineA = 1.0 - smoothstep(0.75, 1.75, abs(sd));
+			c = over(c, float4(cur_line.rgb, cur_line.a * lineA));
+			float fillA = 1.0 - smoothstep(-0.5, 0.75, sd);
+			c = over(c, float4(cur_fill.rgb, cur_fill.a * fillA));
+		}
+	}
+
+	// 载体纹理（透明 blank），用它做底可保证 image 参数不被编译器优化掉
+	float4 base = image.Sample(def_sampler, v_in.uv);
+	return over(base, c);
+}
+
+technique Draw
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader  = PSMouse(v_in);
+	}
+}

@@ -1,0 +1,16 @@
+# WorkBuddy 工作区数据，绝不能上传
+.workbuddy/
+
+# 系统文件
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# 编辑器
+.vscode/
+.idea/
