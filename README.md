@@ -1,6 +1,6 @@
-[English](README.md) | 简体中文
+[English](README.md) | [简体中文](README.zh-CN.md)
 
-# OBS Mouse Highlight Overlay (Mouse FX) / OBS 鼠标高亮叠加
+# OBS Mouse Highlight Overlay (Mouse FX)
 
 <p align="center">
   <img src="docs/hero-highlight.png" width="420" alt="mouse highlight">
@@ -8,33 +8,33 @@
 
 An **OBS built-in Lua script** that draws a mouse highlight circle, click ripples and a motion
 trail directly onto your canvas — and renders the system cursor **on top of everything**.
-Perfect for tutorials, demos and screencasts.
-
-一个 **OBS 内置 Lua 脚本**：直接在画面里画出鼠标高亮圈、点击波纹、移动拖影，
-并把系统光标画在最上层——教程 / 演示录屏神器。
+Built for tutorials, demos and screencasts.
 
 ## Features
 
-- **Persistent highlight circle** — outer ring + translucent fill, both individually toggleable
-  (default: yellow ring + soft fill)
-- **Click ripples** — left / right / middle buttons can have different colors; 1–3 expanding rings
+- **Persistent highlight circle** — an outer ring plus a translucent fill, each individually
+  toggleable (default: yellow ring with soft fill). Radius, thickness, colors and glow are adjustable
+- **Click ripples** — expanding rings on click, with a separate color per mouse button
+  (left / right / middle) and support for 1–3 stacked rings
 - **Optional motion trail** — fading afterimages that follow the cursor
-- **Self-drawn cursor** (the core feature) — the script grabs the current Windows cursor bitmap
-  (including hotspot) in real time and paints it on the **topmost layer**, so the highlight circle
-  always sits *under* the cursor instead of tinting it:
-  - Switching cursor themes / shapes (arrow ↔ text ↔ hand) is picked up **automatically**
+- **Self-drawn system cursor** (the core feature) — the script grabs the current Windows cursor
+  bitmap (hotspot included) in real time and paints it on the **topmost layer**, so the highlight
+  circle always sits *under* the cursor instead of tinting or covering it:
+  - Switching cursor themes or shapes (arrow ↔ text ↔ hand) is picked up **automatically**
   - Animated `.ani` cursors are sampled into 5 frames and looped
-  - Graceful fallback if grabbing fails: bundled arrow sprite → built-in SDF arrow
-- **Works with custom cursor themes** — any theme you use on Windows is what gets drawn:
+  - If grabbing ever fails it falls back gracefully: bundled arrow sprite → built-in SDF arrow,
+    so you never end up with no cursor at all
+- **Works with any custom cursor theme** — whatever theme Windows is using is what gets drawn:
 
   <p align="center"><img src="docs/effect-custom-cursor.png" width="300" alt="custom cursor theme"></p>
 
-- **Multi-monitor aware** — automatically matches the monitor your capture source points at
-- **Zoom-follow compatible** — works with
-  [obs-zoom-to-mouse](https://github.com/tryptophane/obs-zoom-to-mouse); coordinates are remapped
-  every frame so the overlay stays locked while zooming
-- **Zero dependencies** — no Python service, no browser source, no background app.
-  One Lua script + one effect file.
+- **Multi-monitor aware** — automatically matches the monitor that your capture source points at,
+  so coordinates stay correct across displays
+- **Zoom-follow compatible** — pairs with
+  [obs-zoom-to-mouse](https://github.com/tryptophane/obs-zoom-to-mouse): coordinates are remapped
+  every frame, keeping the overlay locked while zooming
+- **Zero dependencies** — no Python service, no browser source, no background process.
+  One Lua script plus one effect file
 
 More effects:
 
@@ -45,37 +45,64 @@ More effects:
 
 ## Installation
 
-1. Download the `obs-fx` folder from this repository
-   (`mouse-fx.lua`, `mouse-fx.effect` and `blank.png` **must stay together in one directory**)
-2. OBS menu → **Tools → Scripts** → click **+** → pick `obs-fx/mouse-fx.lua`
-3. Every parameter applies instantly, no restart needed
+### 1. Get the files
 
-> Prefer a path without non-ASCII characters (some OBS builds fail to load scripts
-> from such paths).
+Download `obs-mouse-fx-v1.0.0.zip` from the
+[Releases page](https://github.com/XxkumaXia/obs-mouse-fx/releases) and extract it
+(or clone this repository and use the `obs-fx` folder).
+
+> Keep `mouse-fx.lua`, `mouse-fx.effect` and `blank.png` **in the same folder** — OBS fails to
+> load the script if they are separated. Prefer a folder path without non-ASCII characters
+> (e.g. `D:\obs-fx`), since some OBS builds cannot load scripts from such paths.
+
+### 2. Load it in OBS
+
+1. Open OBS Studio → menu **Tools → Scripts** (`工具 → 脚本`)
+2. In the Scripts window, click the **+** button at the bottom left
+3. Browse to the extracted folder and select **`mouse-fx.lua`** → **Open**
+4. `mouse-fx.lua` now appears in the script list on the left, and its property panel appears on
+   the right. Every parameter applies **instantly** — no restart required
+5. OBS remembers added scripts, so it is loaded automatically on the next launch
+
+<p align="center"><img src="docs/panel-region.png" width="480" alt="script properties panel"></p>
+
+### 3. Add it to your scene
+
+Either of the two usages below — see [Usage](#usage).
+
+### Updating
+
+Overwrite the old files with the new ones, then click the **Reload Scripts** (circular arrow)
+button at the bottom of the Scripts window. OBS loads the copy at the path you selected, so if
+you move the folder you need to remove and re-add the script.
 
 ## Usage
 
-### A. As a filter on your capture source (recommended)
+### A. As a filter on a capture source (recommended)
 
-Right-click your **Display Capture / Window Capture / Game Capture** → **Filters** → **+** →
-**Mouse Highlight Overlay (Mouse FX)**.
+Right-click your **Display Capture / Window Capture / Game Capture** source → **Filters** →
+**+** (Effect Filters) → **Mouse Highlight Overlay (Mouse FX)**.
 The filter detects which monitor it is attached to and converts coordinates automatically —
-multi-monitor setups need no manual config.
+multi-monitor setups need no manual configuration.
 
 ### B. As a standalone overlay source
 
-Add source **Mouse Highlight Layer (Mouse FX)** and drag it to the top.
-A standalone layer has no idea which monitor you are recording, so in the script panel choose
-**Region → Specify monitor** and set **Layer width/height** to that monitor's resolution:
+Scene → Sources **+** → **Mouse Highlight Layer (Mouse FX)**, then drag it to the top of the list.
+A standalone layer cannot tell which monitor you are recording, so in the script panel set
+**Region → Specify monitor** and set **Layer width / height** to that monitor's resolution:
 
 <p align="center"><img src="docs/panel-region.png" width="480" alt="region settings"></p>
+
+Optional: when using [obs-zoom-to-mouse](https://github.com/tryptophane/obs-zoom-to-mouse) with
+the standalone layer, pick the zoomed capture source in the **Zoom-follow source** dropdown and
+the overlay remaps itself to the zoom crop every frame.
 
 ### Why the circle stays *under* the cursor
 
 OBS's display capture bakes the system cursor **into the captured frame**, while the highlight
-overlay sits above the frame — a translucent fill would inevitably smear over the cursor.
+overlay sits above that frame — a translucent fill would inevitably smear over the cursor.
 
-The fix: with **Cursor takeover** enabled, the script automatically disables the capture source's
+The fix: with **Cursor takeover** enabled, the script automatically turns off the capture source's
 "Capture cursor" option and draws the cursor itself on the topmost layer. The layer order is fixed:
 
 ```
@@ -85,13 +112,12 @@ trail → glow → click ripples → fill → ring → cursor (always on top)
 ## Parameters
 
 The properties panel is grouped into *Region / Highlight circle / Click ripples / Trail /
-Custom cursor / Misc*. Full parameter tables live in
-**[obs-fx/使用说明.md](obs-fx/使用说明.md)** (Chinese). Highlights:
+Custom cursor / Misc*. Overview:
 
 | Group | Key options |
 |---|---|
 | Highlight circle | style, radius, ring thickness, color, opacity, glow |
-| Click ripples | duration, radii, ring width, 1–3 rings, per-button colors |
+| Click ripples | duration, start/end radius, ring width, 1–3 rings, per-button colors |
 | Trail | count, radius, sampling interval, color |
 | Custom cursor | auto-grab system cursor, regrab button, image fallback, hotspot, scale |
 | Region | auto / primary monitor / virtual desktop / custom / specify monitor |
@@ -107,33 +133,36 @@ Custom cursor / Misc*. Full parameter tables live in
   <img src="docs/panel-cursor.png" width="420" alt="cursor settings">
 </p>
 
+The complete parameter reference (Chinese) lives in
+**[obs-fx/使用说明.md](obs-fx/使用说明.md)**.
+
 ## Troubleshooting
 
-Enable **Debug logging**, reload the script, then check the OBS log file
-(Help → Log Files) for lines starting with `[鼠标高亮]` — a healthy load shows
-`首帧渲染完成` (first frame rendered).
+Enable **Debug logging**, reload the script, then open the OBS log
+(Help → Log Files) and look for lines starting with `[鼠标高亮]` — a healthy load prints
+`首帧渲染完成` ("first frame rendered").
 
 | Symptom | Fix |
 |---|---|
-| Circle offset from the real cursor | Check the "mapped region" log line; if wrong, switch Region to **Custom** and enter the monitor's origin + resolution |
+| Circle offset from the real cursor | Check the "mapped region" log line; if it is wrong, switch Region to **Custom** and enter the monitor origin + resolution |
 | Standalone layer misaligned | Region → **Specify monitor**, and set Layer width/height to that monitor's resolution |
 | Two cursors on screen | Make sure both **Self-drawn cursor** and **Cursor takeover** are enabled |
 | Cursor theme change not picked up | Click the **Regrab cursor** button |
-| Nothing shows up | Verify the three files are in the same directory, the filter is enabled, and the log shows "first frame rendered" |
+| Nothing shows up at all | Verify the three files share one folder, the filter is enabled, and the log shows "first frame rendered" |
 
 The full troubleshooting table (Chinese) is in
 [obs-fx/使用说明.md](obs-fx/使用说明.md#五排障).
 
 ## Development
 
-See **[DEVELOPMENT.md](DEVELOPMENT.md)** for the architecture breakdown, key code index and the
-history of hard-won fixes, plus the debug scripts in `dev-archive/`
-(cursor parsing, 1bpp mask verification, FFI auditing, PNG regenerating).
+See **[DEVELOPMENT.md](DEVELOPMENT.md)** for the architecture breakdown, a key-code index and the
+history of hard-won fixes, plus the debug scripts under `dev-archive/`
+(cursor parsing, 1bpp mask verification, FFI auditing, cursor sprite regeneration).
 
 ## Platform
 
-**Windows only** (cursor position and bitmap come from the Win32 API).
-Tested with OBS Studio 28+ (LuaJIT + libobs graphics API).
+**Windows only** — cursor position and bitmap both come from the Win32 API (LuaJIT `ffi`).
+Tested on OBS Studio 28+ (LuaJIT + libobs graphics API).
 
 ## License
 
