@@ -45,7 +45,8 @@
 ### 一、拿到文件
 
 从 [Releases 页面](https://github.com/XxkumaXia/obs-mouse-fx/releases) 下载
-`obs-mouse-fx-v1.1.0.zip` 并解压（也可以直接克隆本仓库，用里面的 `obs-fx` 目录）。
+`obs-mouse-fx-v1.1.1.zip` 并解压（也可以直接克隆本仓库，用里面的 `obs-fx` 目录；
+英文版是同目录下的 `obs-mouse-fx-en-v1.1.1.zip`）。
 
 > `mouse-fx.lua`、`mouse-fx.effect`、`blank.png` 三个文件**必须放在同一目录**，
 > 拆开 OBS 就加载不了。目录路径建议不含中文（例如 `D:\obs-fx`），

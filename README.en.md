@@ -51,7 +51,7 @@ More effects:
 
 ### 1. Get the files
 
-Download `obs-mouse-fx-v1.1.0.zip` from the
+Download `obs-mouse-fx-v1.1.1.zip` from the
 [Releases page](https://github.com/XxkumaXia/obs-mouse-fx/releases) and extract it
 (or clone this repository and use the `obs-fx` folder).
 
