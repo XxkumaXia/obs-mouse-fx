@@ -36,7 +36,8 @@ Built for tutorials, demos and screencasts.
   so coordinates stay correct across displays
 - **Zoom-follow compatible** — pairs with
   [obs-zoom-to-mouse](https://github.com/BlankSourceCode/obs-zoom-to-mouse): coordinates are remapped
-  every frame, keeping the overlay locked while zooming
+  every frame, keeping the overlay locked while zooming (a **compatible modified build** of it ships
+  in this repository's Release — see "Companion project" below)
 - **Zero dependencies** — no Python service, no browser source, no background process.
   One Lua script plus one effect file
 
@@ -175,6 +176,40 @@ The full troubleshooting table (Chinese) is in
 See **[DEVELOPMENT.md](DEVELOPMENT.md)** for the architecture breakdown, a key-code index and the
 history of hard-won fixes, plus the debug scripts under `dev-archive/`
 (cursor parsing, 1bpp mask verification, FFI auditing, cursor sprite regeneration).
+
+## Companion project: OBS Zoom to Mouse (compatible modified build v1.1)
+
+The [v1.1.1 Release](https://github.com/XxkumaXia/obs-mouse-fx/releases/tag/v1.1.1) also bundles
+another script: a **modified** build of
+[obs-zoom-to-mouse](https://github.com/BlankSourceCode/obs-zoom-to-mouse) by **BlankSourceCode**,
+based on upstream v1.0.2 — it zooms a display-capture source and keeps the view on the mouse,
+the natural partner for this overlay.
+
+> Upstream carries `Copyright (c) BlankSourceCode. All rights reserved.` and declares no
+> open-source licence. This build claims no rights over the upstream code and will be taken
+> down if the author asks.
+
+**Why "compatible modified build"** (measured, not assumed): the hotkey ids
+`toggle_zoom_hotkey` / `toggle_follow_hotkey` are identical to upstream, all 19 shared setting
+keys keep their names and defaults, and the filter name / special value are unchanged —
+replace the file and nothing in the panel or under Settings → Hotkeys needs redoing.
+
+**What changed** (from a skeleton-level diff; the full list is in the bundled `README.md`):
+
+- Fixes the multi-monitor "press the hotkey and the picture never moves" class of problems:
+  follow-outside-bounds on by default, follow border 45, unlock distance capped at 40 px,
+  safe-zone locking needs 30 frames of true stillness plus a cooldown after unlock
+- Monitors located with Win32 `EnumDisplayMonitors` instead of name-string parsing
+- Adds: auto-switch to the monitor under the cursor, hotkey text boxes (bypassing the Windows
+  capture box that cannot take `Alt`+letter)
+- Removes upstream's socket coordinate receiver; probes API presence instead of OBS version numbers
+- Panel and comments localized to Chinese (an English build ships alongside; the two are
+  line-for-line identical in code)
+
+Grab `obs-zoom-to-mouse-v1.1.zip` (Chinese) and `obs-zoom-to-mouse-en-v1.1.zip` (English) from the
+same release page. If a combination refuses to bind, check who owns it first — emulators, screenshot
+tools and GPU overlays are the usual culprits (one confirmed case: MuMu Player holding `Alt`+`Q`
+globally); the probe script ships in the archive at `dev-archive/hotkey_probe.ps1`.
 
 ## Platform
 

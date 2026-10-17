@@ -30,7 +30,7 @@
 
 - **多显示器**：自动匹配采集源对应的那块物理屏，多屏坐标不会乱
 - **联动缩放**：配合 [obs-zoom-to-mouse](https://github.com/BlankSourceCode/obs-zoom-to-mouse) 放大跟焦时，
-  每帧重映射坐标，放大过程中叠加层始终锁定
+  每帧重映射坐标，放大过程中叠加层始终锁定（本仓库 Release 里附带它的**兼容修改版**，见下方「附带项目」）
 - **零依赖**：不需要 Python 服务、浏览器源或任何后台程序，一个 Lua 脚本 + 一个 effect 文件搞定
 
 更多效果：
@@ -156,6 +156,33 @@ OBS 的「显示器采集」会把系统光标**直接画进采集画面**，而
 
 见 **[DEVELOPMENT.md](DEVELOPMENT.md)**：原理拆解、关键代码索引、历史踩坑记录，
 以及 `dev-archive/` 里的光标解析 / 掩码修复验证 / FFI 审计 / 光标图重生成等调试脚本。
+
+## 附带项目：OBS 缩放跟焦（obs-zoom-to-mouse · 兼容修改版 v1.1）
+
+[Release v1.1.1](https://github.com/XxkumaXia/obs-mouse-fx/releases/tag/v1.1.1) 的附件里
+还打包了另一个脚本：**BlankSourceCode** 的
+[obs-zoom-to-mouse](https://github.com/BlankSourceCode/obs-zoom-to-mouse) 的**修改版**，
+基于上游 v1.0.2 —— 把「显示器采集」源放大并让画面跟着鼠标走，和本脚本是天然搭档。
+
+> 上游版权为 `Copyright (c) BlankSourceCode. All rights reserved.`，仓库未声明开源许可证。
+> 本修改版不对上游代码主张任何权利，原作者要求下架即删除。
+
+**为什么叫「兼容修改版」**（实测过的）：热键注册名 `toggle_zoom_hotkey` / `toggle_follow_hotkey`
+与上游一字不差，19 个共享设置键名与默认值全部一致，滤镜名 / 特殊值一致 ——
+从原版换过来只需替换文件，设置面板和快捷键都不用重配。
+
+**改了什么**（骨架级 diff 量出来的，完整清单在包内 `README.md`）：
+
+- 修掉多显示器上「按了热键画面再也不动」一类问题：跟随超出边界默认开启、
+  跟随边界默认 45、解锁距离上限 40 px、安全区锁定要求真正静止 30 帧 + 解锁冷却
+- 显示器定位改用 Win32 `EnumDisplayMonitors`（上游按名称解析，多数机器上解析出 nil）
+- 新增：自动切换到光标所在显示器、热键文本框（绕开 Windows 吃 `Alt+字母` 的捕获框）
+- 移除上游的 socket 外部坐标接收；按 API 是否存在探测，不再按 OBS 版本号
+- 全部界面文案与注释已汉化（另有英文构建，两者代码骨架逐行一致）
+
+下载同页的 `obs-zoom-to-mouse-v1.1.zip`（中文）与 `obs-zoom-to-mouse-en-v1.1.zip`（英文）。
+快捷键设不进去先查占用 —— 模拟器、截图工具、显卡叠加层最爱干这事（已确认一例：
+MuMu 模拟器全局占用 `Alt+Q`），排查脚本在包内 `dev-archive/hotkey_probe.ps1`。
 
 ## 平台
 
