@@ -164,9 +164,10 @@ OBS `obs_properties_add_color` 返回的是 **`0xAABBGGRR`（低字节是 R）**
 7. **联动裁剪框认错滤镜** → `follow_find_crop_name()` 曾 fallback 到任意 crop_filter（含 zoom 脚本把
    transform 裁剪转成的 `temp_obs-zoom-to-mouse-crop` 临时滤镜），倍率算错、高亮偏移。
    已改为只认精确名 `obs-zoom-to-mouse-crop`，见 §2.6。
-8. **自绘接管失败静默** → 接管源找不到 / 目标不是采集源 / 读不到设置时曾一声不吭，排障没线索。
-   现在按原因打 `logerr`（**始终输出**，不受「输出日志」开关限制），经 `warn_once()` 去重：
-   同实例同原因只报一次，原因变化（换源/改名）重新武装。
+8. **自绘接管失败曾经静默、后来又太吵** → 第一版失败路径全静默（排障没线索）；v1.1.0 改成
+   logerr 始终输出，结果 OBS 对每条 ERROR 都自动弹脚本日志窗，用户每加一次源就弹一次
+   （"每一步都在跳"）。v1.1.1 定稿为分级策略，见坑 10：引导性提示一律 INFO（跟「输出日志」
+   开关、永不弹窗），去重走 `warn_once()`（同实例同原因一次 + 跨实例 60 秒窗口）。
 9. **独立源「自动」区域曾是空头支票** → `region_mode=0` 对独立源只会退化用 `monitor_sel`，
    没有"自动"能力；用户忘选指定显示器 + 被采集屏又不是 Windows 主屏时（多屏常态），
    `(mx-rl-cl)` 拿虚拟桌面坐标减源内坐标 → 一放大光标和圈就飞（双光标/错位）。
@@ -175,6 +176,17 @@ OBS `obs_properties_add_color` 返回的是 **`0xAABBGGRR`（低字节是 R）**
    遗留限制：所有设置都在脚本面板（全局表 `S`），**同一时刻只有一个联动源**——
    要同时给两块屏各叠一层独立源，得先把设置改成按实例存（源 `update` 回调 + `d` 里存 settings），
    是大改，本轮没做。
+10. **脚本日志弹窗规则（OBS 前端行为，实测+源码确认）** → obs-studio
+    `plugins/frontend-tools/scripts.cpp` 的脚本日志回调里：
+    ```cpp
+    if (log_level <= LOG_WARNING) { show(); raise(); }
+    ```
+    OBS 日志级别数值 ERROR(100) < WARNING(200) < INFO(300) < DEBUG(400)，
+    所以 **ERROR 和 WARNING 都会自动弹出脚本日志窗口，只有 INFO 不弹**。
+    v1.1.1 起的日志分级：`log()`=INFO 走「输出日志」开关、永不弹窗（一切引导性提示）；
+    `logerr()`=ERROR 无条件弹窗，只留 4 处真致命（ffi 缺失 / effect 加载失败 /
+    effect 参数缺失 / blank.png 缺失——都是"插件画不了"）。**结论：不想弹窗就别用
+    WARNING 以上级别发提示。**
 
 ---
 
@@ -184,9 +196,10 @@ OBS `obs_properties_add_color` 返回的是 **`0xAABBGGRR`（低字节是 R）**
 - 光标掩码修复验证：`dev-archive/verify_fix.py`、`grab_test.py`（Python 复刻 `grab_cursor` 逻辑，验证 1bpp 掩码与黑块成因）。
 - FFI 调用审计：`dev-archive/audit_calls.py`（比对 DLL 导出表，确认每个 ffi.cdef 都真实存在）。
 - 联动/接管/自动跟随的功能测试：`dev-archive/test_zoom_link.py`（lupa + mock obs API，把
-  [mock + 源码 + 用例] 拼成同一 chunk，直接调脚本里的 local 函数跑 57 个断言：
-  精确名匹配、temp 滤镜不顶替、自挂 Crop/Pad 不误认、警告节流与去重、接管各失败路径、
-  恢复路径、独立源按联动源名探测显示器/换源重新武装/宽高跟随/失败兜底等）。
+  [mock + 源码 + 用例] 拼成同一 chunk，直接调脚本里的 local 函数跑 60 个断言：
+  精确名匹配、temp 滤镜不顶替、自挂 Crop/Pad 不误认、提示节流与去重、接管各失败路径、
+  恢复路径、独立源按联动源名探测显示器/换源重新武装/宽高跟随/失败兜底、
+  输出日志关闭时完全静默、跨实例 60 秒去重等）。
   需要 `pip install lupa`；注意 lupa 自带 Lua 5.5（非 LuaJIT），
   测试里用 package.preload 补了 bit / ffi mock，并用 `set_tick()` 控时钟推进 2 秒节流。
 - 真机：开 OBS 加载 → 日志应有 `首帧渲染完成`；移动鼠标看高亮圈跟随；点击看波纹；换光标主题看是否自动跟上（不行点"重新抓取光标"）。

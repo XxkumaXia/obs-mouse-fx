@@ -1,0 +1,265 @@
+// mouse-fx.effect — OBS mouse highlight overlay (shared by the filter and the source)
+// Draws: persistent highlight ring + glow, click ripples, motion trail, optional self-drawn cursor.
+// All coordinates are in source pixels; the Lua side maps them before passing them in.
+
+uniform float4x4 ViewProj;
+uniform texture2d image;
+
+sampler_state def_sampler {
+	Filter   = Linear;
+	AddressU = Clamp;
+	AddressV = Clamp;
+	AddressW = Clamp;
+};
+
+struct VertData {
+	float4 pos : POSITION;
+	float2 uv  : TEXCOORD0;
+};
+
+VertData VSDefault(VertData v_in)
+{
+	VertData vert_out;
+	vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+	vert_out.uv  = v_in.uv;
+	return vert_out;
+}
+
+// ---------------- uniform ----------------
+uniform float2 mouse_pos;   // cursor position inside the source (pixels)
+uniform float2 img_size;    // source size
+
+uniform float  hl_on;
+uniform float  hl_radius;
+uniform float  hl_thickness;
+uniform float4 hl_color;    // rgb + alpha already multiplied by ring opacity
+uniform float  hl_ring_on;  // draw the outer ring
+uniform float  hl_fill_on;  // draw the inner filled disc
+uniform float  hl_fill_alpha;
+
+uniform float  glow_on;
+uniform float  glow_radius;
+uniform float  glow_alpha;
+
+// center of the fill disc / glow: defaults to the cursor hotspot, can be shifted down to clear the system cursor
+uniform float2 fx_center;
+
+// click ripples: one slot = (x, y, radius, ring alpha); color slot = (r,g,b,fill alpha)
+uniform float4 ring0;  uniform float4 ringc0;
+uniform float4 ring1;  uniform float4 ringc1;
+uniform float4 ring2;  uniform float4 ringc2;
+uniform float4 ring3;  uniform float4 ringc3;
+uniform float4 ring4;  uniform float4 ringc4;
+uniform float4 ring5;  uniform float4 ringc5;
+uniform float4 ring6;  uniform float4 ringc6;
+uniform float4 ring7;  uniform float4 ringc7;
+uniform float  ring_thickness;
+
+// trail dots: one slot = (x, y, radius, alpha)
+uniform float4 dot0;  uniform float4 dot1;
+uniform float4 dot2;  uniform float4 dot3;
+uniform float4 dot4;  uniform float4 dot5;
+uniform float4 dot6;  uniform float4 dot7;
+uniform float4 dot8;  uniform float4 dot9;
+uniform float4 dot10; uniform float4 dot11;
+uniform float4 dot_color;
+
+uniform float  cur_on;
+uniform float  cur_scale;
+uniform float4 cur_fill;
+uniform float4 cur_line;
+
+// image cursor: when cur_use_img=1 draw the cursor from a texture instead (drawn last = topmost, so the ring stays under it)
+uniform texture2d cimg;
+uniform float  cur_use_img;
+uniform float2 cimg_size;   // size of a single frame in pixels
+uniform float2 cimg_hot;    // hotspot, relative to the frame's top-left (pixels)
+uniform float2 cimg_uv0;    // uv top-left of the current frame inside the texture
+uniform float2 cimg_uv1;    // uv bottom-right of the current frame inside the texture
+
+// point sampling for the cursor image so enlarged pixel art stays crisp
+sampler_state cimg_sampler {
+	Filter   = Point;
+	AddressU = Clamp;
+	AddressV = Clamp;
+	AddressW = Clamp;
+};
+
+// ---------------- helpers ----------------
+// straight alpha blending (src over dst)
+float4 over(float4 dst, float4 src)
+{
+	float a = src.a + dst.a * (1.0 - src.a);
+	float3 rgb = (src.rgb * src.a + dst.rgb * dst.a * (1.0 - src.a)) / max(a, 0.0001);
+	return float4(rgb, a);
+}
+
+// ring mask
+float ringMask(float2 p, float2 c, float r, float w)
+{
+	float d = abs(length(p - c) - r);
+	return 1.0 - smoothstep(w * 0.5 - 0.5, w * 0.5 + 0.75, d);
+}
+
+// solid disc mask
+float discMask(float2 p, float2 c, float r)
+{
+	float d = length(p - c);
+	return 1.0 - smoothstep(r - 1.0, r, d);
+}
+
+float4 addRing(float4 col, float2 p, float4 ring, float4 rc, float w)
+{
+	if (ring.w <= 0.0)
+		return col;
+	float4 c = col;
+	if (rc.a > 0.0) { // inner fill
+		float m = discMask(p, ring.xy, ring.z) * rc.a * ring.w;
+		c = over(c, float4(rc.rgb, m));
+	}
+	float m = ringMask(p, ring.xy, ring.z, w) * ring.w;
+	return over(c, float4(rc.rgb, m));
+}
+
+float4 addDot(float4 col, float2 p, float4 d, float4 dc)
+{
+	if (d.w <= 0.0)
+		return col;
+	float m = discMask(p, d.xy, d.z) * d.w;
+	return over(col, float4(dc.rgb, dc.a * m));
+}
+
+// arrow outline (hotspot at 0,0, pointing down; roughly 13 x 22 px, then scaled by cur_scale)
+float arrowSDF(float2 p)
+{
+	float2 v0 = float2(0.0, 0.0);
+	float2 v1 = float2(0.0, 20.0);
+	float2 v2 = float2(4.5, 15.0);
+	float2 v3 = float2(7.5, 22.0);
+	float2 v4 = float2(10.5, 21.0);
+	float2 v5 = float2(7.5, 13.5);
+	float2 v6 = float2(13.0, 13.5);
+
+	float d = 1.0e9;
+	bool inside = false;
+	float2 a, b, e, w, q;
+	float t, x;
+
+	a = v0; b = v1;
+	e = b - a; w = p - a; t = clamp(dot(w, e) / max(dot(e, e), 1e-6), 0.0, 1.0); q = w - e * t; d = min(d, dot(q, q));
+	if ((a.y > p.y) != (b.y > p.y)) { x = a.x + (p.y - a.y) / (b.y - a.y) * (b.x - a.x); if (p.x < x) inside = !inside; }
+
+	a = v1; b = v2;
+	e = b - a; w = p - a; t = clamp(dot(w, e) / max(dot(e, e), 1e-6), 0.0, 1.0); q = w - e * t; d = min(d, dot(q, q));
+	if ((a.y > p.y) != (b.y > p.y)) { x = a.x + (p.y - a.y) / (b.y - a.y) * (b.x - a.x); if (p.x < x) inside = !inside; }
+
+	a = v2; b = v3;
+	e = b - a; w = p - a; t = clamp(dot(w, e) / max(dot(e, e), 1e-6), 0.0, 1.0); q = w - e * t; d = min(d, dot(q, q));
+	if ((a.y > p.y) != (b.y > p.y)) { x = a.x + (p.y - a.y) / (b.y - a.y) * (b.x - a.x); if (p.x < x) inside = !inside; }
+
+	a = v3; b = v4;
+	e = b - a; w = p - a; t = clamp(dot(w, e) / max(dot(e, e), 1e-6), 0.0, 1.0); q = w - e * t; d = min(d, dot(q, q));
+	if ((a.y > p.y) != (b.y > p.y)) { x = a.x + (p.y - a.y) / (b.y - a.y) * (b.x - a.x); if (p.x < x) inside = !inside; }
+
+	a = v4; b = v5;
+	e = b - a; w = p - a; t = clamp(dot(w, e) / max(dot(e, e), 1e-6), 0.0, 1.0); q = w - e * t; d = min(d, dot(q, q));
+	if ((a.y > p.y) != (b.y > p.y)) { x = a.x + (p.y - a.y) / (b.y - a.y) * (b.x - a.x); if (p.x < x) inside = !inside; }
+
+	a = v5; b = v6;
+	e = b - a; w = p - a; t = clamp(dot(w, e) / max(dot(e, e), 1e-6), 0.0, 1.0); q = w - e * t; d = min(d, dot(q, q));
+	if ((a.y > p.y) != (b.y > p.y)) { x = a.x + (p.y - a.y) / (b.y - a.y) * (b.x - a.x); if (p.x < x) inside = !inside; }
+
+	a = v6; b = v0;
+	e = b - a; w = p - a; t = clamp(dot(w, e) / max(dot(e, e), 1e-6), 0.0, 1.0); q = w - e * t; d = min(d, dot(q, q));
+	if ((a.y > p.y) != (b.y > p.y)) { x = a.x + (p.y - a.y) / (b.y - a.y) * (b.x - a.x); if (p.x < x) inside = !inside; }
+
+	d = sqrt(d);
+	return inside ? -d : d;
+}
+
+// ---------------- main ----------------
+float4 PSMouse(VertData v_in) : TARGET
+{
+	float2 p = v_in.uv * img_size;
+	float4 c = float4(0.0, 0.0, 0.0, 0.0);
+
+	// trail (drawn first, i.e. bottom layer)
+	c = addDot(c, p, dot0,  dot_color);
+	c = addDot(c, p, dot1,  dot_color);
+	c = addDot(c, p, dot2,  dot_color);
+	c = addDot(c, p, dot3,  dot_color);
+	c = addDot(c, p, dot4,  dot_color);
+	c = addDot(c, p, dot5,  dot_color);
+	c = addDot(c, p, dot6,  dot_color);
+	c = addDot(c, p, dot7,  dot_color);
+	c = addDot(c, p, dot8,  dot_color);
+	c = addDot(c, p, dot9,  dot_color);
+	c = addDot(c, p, dot10, dot_color);
+	c = addDot(c, p, dot11, dot_color);
+
+	// glow (center can be shifted down via fx_center so it doesn't wash over the cursor)
+	if (glow_on > 0.5 && glow_radius > 0.0) {
+		float d = length(p - fx_center);
+		float g = 1.0 - smoothstep(0.0, glow_radius, d);
+		g = g * g;
+		c = over(c, float4(hl_color.rgb, glow_alpha * g));
+	}
+
+	// click ripples
+	c = addRing(c, p, ring0, ringc0, ring_thickness);
+	c = addRing(c, p, ring1, ringc1, ring_thickness);
+	c = addRing(c, p, ring2, ringc2, ring_thickness);
+	c = addRing(c, p, ring3, ringc3, ring_thickness);
+	c = addRing(c, p, ring4, ringc4, ring_thickness);
+	c = addRing(c, p, ring5, ringc5, ring_thickness);
+	c = addRing(c, p, ring6, ringc6, ring_thickness);
+	c = addRing(c, p, ring7, ringc7, ring_thickness);
+
+	// persistent highlight: inner filled disc (below the ring and below the cursor)
+	if (hl_on > 0.5 && hl_fill_on > 0.5 && hl_radius > 0.0) {
+		float m = discMask(p, fx_center, hl_radius) * hl_fill_alpha;
+		c = over(c, float4(hl_color.rgb, m));
+	}
+
+	// persistent highlight: outer ring (always anchored to the true hotspot)
+	if (hl_on > 0.5 && hl_ring_on > 0.5 && hl_thickness > 0.0) {
+		float m = ringMask(p, mouse_pos, hl_radius, hl_thickness);
+		c = over(c, float4(hl_color.rgb, hl_color.a * m));
+	}
+
+	// cursor (drawn last = topmost, so the ring is always under it)
+	if (cur_on > 0.5) {
+		if (cur_use_img > 0.5) {
+			float  sc = max(cur_scale, 0.01);
+			float2 sz = max(cimg_size, float2(1.0, 1.0));
+			// align the hotspot to mouse_pos: image top-left = cursor pos - hotspot * scale
+			float2 org = mouse_pos - cimg_hot * sc;
+			float2 uv  = (p - org) / (sz * sc);
+			if (uv.x >= 0.0 && uv.x < 1.0 && uv.y >= 0.0 && uv.y < 1.0) {
+				float2 tuv = lerp(cimg_uv0, cimg_uv1, uv);
+				float4 t = cimg.Sample(cimg_sampler, tuv);
+				c = over(c, float4(t.rgb, t.a));
+			}
+		} else {
+			float2 q = (p - mouse_pos) / max(cur_scale, 0.01);
+			float sd = arrowSDF(q);
+			float lineA = 1.0 - smoothstep(0.75, 1.75, abs(sd));
+			c = over(c, float4(cur_line.rgb, cur_line.a * lineA));
+			float fillA = 1.0 - smoothstep(-0.5, 0.75, sd);
+			c = over(c, float4(cur_fill.rgb, cur_fill.a * fillA));
+		}
+	}
+
+	// carrier texture (transparent blank); using it as the base keeps the image parameter from being optimised away
+	float4 base = image.Sample(def_sampler, v_in.uv);
+	return over(base, c);
+}
+
+technique Draw
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader  = PSMouse(v_in);
+	}
+}

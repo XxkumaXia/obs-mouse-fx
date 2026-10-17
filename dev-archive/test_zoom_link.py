@@ -17,12 +17,14 @@ test_zoom_link.py —— mouse-fx.lua「缩放联动 / 自绘接管」改动的�
 detect_named_source_region / update_state）。
 obs API 全部用 Lua 表 mock，不需要真实 OBS；ffi 走本机真实 user32/kernel32。
 
-覆盖（T0-T22）：
-  T0-T5   联动裁剪滤镜精确名匹配 + follow_crop 节流警告
-  T6-T15  自绘接管成功 / 各失败路径告警 / 恢复路径
+覆盖（T0-T24）：
+  T0-T5   联动裁剪滤镜精确名匹配 + follow_crop 节流提示
+  T6-T15  自绘接管成功 / 各失败路径提示 / 恢复路径
   T16-T22 独立源「自动」区域：按联动缩放源（回退接管源）读它捕获的显示器、
-          换源重新探测、读不到时 3 次 logerr 并退回指定显示器/主屏、
+          换源重新探测、读不到时提示并退回指定显示器/主屏、
           宽高跟随（get_width/get_height）
+  T23-T24 日志策略：输出日志关闭（默认）时引导提示完全静默；
+          同一原因跨实例 60 秒内只提示一次（反复删加源不刷屏）
 
 运行：python dev-archive/test_zoom_link.py     （依赖 lupa：pip install lupa）
 """
@@ -255,7 +257,8 @@ eq(ch, 540, "T4d cy")
 S.follow_source = "自有裁剪采集"
 eq(follow_crop(d), nil, "T4e 换源后旧裁剪框立即失效")
 
-print("== T5 找不到 zoom 滤镜：延迟 3 次重解析才警告、不重复 ==")
+print("== T5 找不到 zoom 滤镜：延迟 3 次重解析才提示、不重复 ==")
+S.log_on = true
 S.follow_source = "没有任何滤镜的采集"
 REG["没有任何滤镜的采集"] = {
 	id = "monitor_capture", name = "没有任何滤镜的采集", enabled = true,
@@ -281,9 +284,9 @@ apply_cursor_takeover(d6)
 eq(cap6.settings.capture_cursor, false, "T6a 捕获光标被关掉")
 check(has_log("已关掉"), "T6b 成功日志（输出日志开着时才打）")
 
-print("== T7 独立源没配接管源：警告一次，且不受输出日志开关限制 ==")
+print("== T7 独立源没配接管源：提示一次（INFO 级，跟输出日志开关）==")
 local layer = { id = "mouse_fx_source", name = "鼠标高亮层", enabled = true, settings = {} }
-S.log_on = false
+S.log_on = true
 S.take_src = ""; S.follow_source = ""
 local d7 = { source = layer, clock = 0 }
 log_clear()
@@ -418,17 +421,17 @@ set_tick(10000)
 update_state(d19)
 eq(d19.auto[1], 309, "T19 经接管目标源探测到同一块屏")
 
-print("== T20 读不到显示器：连续 3 次才 logerr、不重复、不设错区域 ==")
+print("== T20 读不到显示器：连续 3 次才提示、不重复、不设错区域 ==")
 -- 模拟 script_update 已跑过 get_region()：自动读不到时的兜底 = 主屏
 S.region_left, S.region_top, S.region_w, S.region_h = 0, 0, 2560, 1440
 S.follow_source = "被删掉的采集"; S.take_src = ""; S.monitor_sel = ""
-S.log_on = false
+S.log_on = true
 local d20 = { source = layer17, clock = 0 }
 set_tick(0); update_state(d20)
 set_tick(3000); update_state(d20)
-check(log_count("读不到联动源") == 0, "T20a 前两次不警告（同 follow_miss 的节流思路）")
+check(log_count("读不到联动源") == 0, "T20a 前两次不提示（同 follow_miss 的节流思路）")
 set_tick(6000); update_state(d20)
-check(log_count("读不到联动源") == 1, "T20b 第三次 logerr（log_on=false 也打）")
+check(log_count("读不到联动源") == 1, "T20b 第三次打提示（开输出日志时可见）")
 set_tick(9000); update_state(d20)
 set_tick(12000); update_state(d20)
 check(log_count("读不到联动源") == 1, "T20c 不重复刷")
@@ -465,6 +468,27 @@ eq(d22.auto[3], 2560, "T22b 新屏 2560 宽")
 eq(source_def.get_width(d22), 2560, "T22c 宽高自动换成 2560")
 check(log_count("独立源自动匹配") == 1, "T22d 换源后重新打匹配日志（重新武装）")
 check(has_log("宽高已跟随捕获的显示器：2560x1440"), "T22e 宽高更换日志")
+
+print("== T23 输出日志关闭（默认）：引导提示完全静默，不弹不刷 ==")
+S.log_on = false
+S.follow_source = ""; S.take_src = ""
+local d23 = { source = layer17, clock = 0 }
+log_clear()
+apply_cursor_takeover(d23)
+check(#LOG == 0, "T23a log_on=false 时接管提示静默（OBS 不会弹脚本日志窗）")
+set_tick(0); update_state(d23)
+set_tick(3000); update_state(d23)
+check(#LOG == 0, "T23b 自动匹配失败也静默")
+
+print("== T24 跨实例去重：同一原因 60 秒内只提示一次 ==")
+S.log_on = true; S.take_cursor = true; S.cur_on = true
+S.take_src = "被改名的采集2"
+local d24a = { source = layer17, clock = 0 }
+local d24b = { source = layer17, clock = 0 }
+log_clear()
+apply_cursor_takeover(d24a)
+apply_cursor_takeover(d24b)
+check(log_count("找不到名为「被改名的采集2」的采集源") == 1, "T24a 两个实例同一原因只报一次（反复删加源不刷屏）")
 
 print("")
 if FAIL > 0 then

@@ -10,6 +10,10 @@ An **OBS built-in Lua script** that draws a mouse highlight circle, click ripple
 trail directly onto your canvas — and renders the system cursor **on top of everything**.
 Built for tutorials, demos and screencasts.
 
+> **English build:** [`obs-fx-en/`](obs-fx-en/README.md) holds the same script with English panel
+> labels, log messages and comments — same source ids and settings keys, so it drops straight into
+> an existing scene. Prebuilt: `build/obs-mouse-fx-en-v1.1.1.zip`.
+
 ## Features
 
 - **Persistent highlight circle** — an outer ring plus a translucent fill, each individually
@@ -159,7 +163,7 @@ Enable **Debug logging**, reload the script, then open the OBS log
 |---|---|
 | Circle offset from the real cursor | Check the "mapped region" log line; if it is wrong, switch Region to **Custom** and enter the monitor origin + resolution |
 | Standalone layer misaligned | Set **Zoom-follow source** to the capture source you are recording and Region to **Auto** (region and size follow automatically); or pin it with Region → **Specify monitor** and set Layer width/height to that monitor's resolution |
-| Two cursors on screen | Make sure both **Self-drawn cursor** and **Cursor takeover** are enabled |
+| Two cursors on screen | Make sure both **Self-drawn cursor** and **Cursor takeover** are enabled. For the exact failure reason, enable **Debug logging** and reload — by default the script stays completely silent (only effect/texture load failures pop up) |
 | Cursor theme change not picked up | Click the **Regrab cursor** button |
 | Nothing shows up at all | Verify the three files share one folder, the filter is enabled, and the log shows "first frame rendered" |
 

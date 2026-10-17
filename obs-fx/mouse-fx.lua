@@ -34,9 +34,16 @@ local CUR_ERR_SEEN = {}
 
 -- 版本号：加载日志里会打出来，排障时先确认 OBS 加载的确实是这一版
 -- （踩过「仓库改了但 OBS 还在跑旧文件」的坑，日志不带版本号根本分不清）
-local SCRIPT_VERSION = "1.1.0"
+local SCRIPT_VERSION = "1.1.1"
 
 -- 日志默认关闭，避免在 OBS 脚本日志里刷屏。需要排障时在面板里打开「输出日志」。
+-- 分级策略（v1.1.1 改，踩过坑见 DEVELOPMENT.md 坑 10）：
+--   OBS 前端对「级别 <= LOG_WARNING」的脚本日志会自动 show()+raise() 脚本日志窗口
+--   （obs-studio/plugins/frontend-tools/scripts.cpp 的 log 回调），
+--   也就是说 ERROR 和 WARNING 都会弹窗，只有 INFO 不弹。
+--   因此：log()=INFO 只跟「输出日志」开关走、永不弹窗——一切引导性提示走它；
+--   logerr()=ERROR 无条件弹窗，只留给真致命错误（effect / blank.png 加载失败 =
+--   插件根本画不了，必须让用户知道）。
 local function log(msg)
 	if S.log_on then
 		obs.script_log(LOG_INFO, "[鼠标高亮] " .. msg)
@@ -296,7 +303,7 @@ local function follow_crop(d)
 			d.follow_miss = (d.follow_miss or 0) + 1
 			if d.follow_miss >= 3 and not d.follow_warned then
 				d.follow_warned = true
-				logerr("联动缩放：源「" .. tostring(S.follow_source) ..
+				log("联动缩放：源「" .. tostring(S.follow_source) ..
 					"」上找不到 zoom 裁剪滤镜（" .. ZOOM_CROP_NAME .. "），暂按未放大处理。" ..
 					"不会拿采集源上其它 Crop/Pad 滤镜顶替；zoom 脚本建好滤镜后会自动接上")
 			end
@@ -1252,16 +1259,34 @@ local CURSOR_SOURCES = {
 	game_capture    = true,
 }
 
--- 同一实例、同一原因只警告一次（原因变了会重新武装）。
--- 这些是真正的配置问题（关不掉「捕获光标」= 双光标/高亮糊光标），
--- 走 logerr 始终输出，不受面板「输出日志」开关限制——排障时不用先开开关。
+-- 引导性提示的去重：同一实例同一原因只报一次（原因变了重新武装）；
+-- 跨实例 60 秒内同一原因也只报一次——反复删加源 / 切场景重建实例不会刷屏。
+-- 走 log()（INFO）：默认关闭、永不弹窗；排障时开「输出日志」即可看到全部提示。
+-- （曾经这些提示走 logerr 无条件弹窗：OBS 对 WARNING 以上级别会自动拉起脚本日志
+--   窗口，用户每加一次源就弹一次，实测很烦，故全部降级为 INFO。）
+local WARN_SEEN = {}
+local function now_ms()
+	local ok, v = pcall(function()
+		return tonumber(kernel32.GetTickCount64())
+	end)
+	if ok then
+		return v or 0
+	end
+	return 0
+end
 local function warn_once(d, reason, nm, msg)
 	local key = tostring(reason) .. "|" .. tostring(nm or "")
 	if d.warn_key == key then
 		return
 	end
 	d.warn_key = key
-	logerr(msg)
+	local t = now_ms()
+	local seen = WARN_SEEN[key]
+	if seen ~= nil and (t - seen) < 60000 then
+		return
+	end
+	WARN_SEEN[key] = t
+	log(msg)
 end
 
 -- 找出「该关捕获光标」的那个采集源：
@@ -1449,7 +1474,7 @@ local function update_state(d)
 						d.auto_failed = (d.auto_failed or 0) + 1
 						if d.auto_failed >= 3 then
 							d.auto_logged = true
-							logerr("独立源自动匹配：读不到联动源「" .. nm ..
+							log("独立源自动匹配：读不到联动源「" .. nm ..
 								"」捕获的显示器（源被删了 / 不是显示器采集 / 显示器识别失败），" ..
 								"已退回「指定显示器」/主屏。多屏录制时请确认「联动缩放源」" ..
 								"填的是当前在录那块屏的采集源")
